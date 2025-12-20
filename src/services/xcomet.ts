@@ -113,7 +113,7 @@ try:
         ${reference ? `"ref": ${escapedReference}` : ""}
     }]
     
-    output = model.predict(data, batch_size=1, gpus=0)
+    output = model.predict(data, batch_size=1, gpus=0, num_workers=1)
     
     # Restore stderr
     sys.stderr = original_stderr
