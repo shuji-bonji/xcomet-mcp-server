@@ -1,4 +1,7 @@
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
+import { existsSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import type { EvaluateOutput, DetectErrorsOutput, BatchEvaluateOutput } from "../schemas/index.js";
 
 /**
@@ -10,9 +13,99 @@ export interface XCometConfig {
   timeout: number;
 }
 
+/**
+ * Detect Python path that has comet installed
+ * Priority:
+ * 1. XCOMET_PYTHON_PATH environment variable
+ * 2. pyenv Python (checks common versions)
+ * 3. Homebrew Python
+ * 4. Default "python3"
+ */
+function detectPythonPath(): string {
+  // 1. Check environment variable first
+  const envPythonPath = process.env.XCOMET_PYTHON_PATH;
+  if (envPythonPath && existsSync(envPythonPath)) {
+    return envPythonPath;
+  }
+
+  const home = homedir();
+
+  // 2. Check pyenv versions (sorted by version, newest first)
+  const pyenvVersionsDir = join(home, ".pyenv", "versions");
+  if (existsSync(pyenvVersionsDir)) {
+    try {
+      const versions = require("fs")
+        .readdirSync(pyenvVersionsDir)
+        .filter((v: string) => /^\d+\.\d+/.test(v))
+        .sort((a: string, b: string) => {
+          // Sort by version number descending
+          const aParts = a.split(".").map(Number);
+          const bParts = b.split(".").map(Number);
+          for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+            const diff = (bParts[i] || 0) - (aParts[i] || 0);
+            if (diff !== 0) return diff;
+          }
+          return 0;
+        });
+
+      for (const version of versions) {
+        const pythonPath = join(pyenvVersionsDir, version, "bin", "python3");
+        if (existsSync(pythonPath)) {
+          // Check if comet is installed in this Python
+          try {
+            execSync(`${pythonPath} -c "import comet"`, {
+              timeout: 5000,
+              stdio: "ignore",
+            });
+            return pythonPath;
+          } catch {
+            // comet not installed in this version, try next
+          }
+        }
+      }
+    } catch {
+      // pyenv directory exists but couldn't read it
+    }
+  }
+
+  // 3. Check Homebrew Python
+  const brewPaths = [
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3",
+  ];
+  for (const pythonPath of brewPaths) {
+    if (existsSync(pythonPath)) {
+      try {
+        execSync(`${pythonPath} -c "import comet"`, {
+          timeout: 5000,
+          stdio: "ignore",
+        });
+        return pythonPath;
+      } catch {
+        // comet not installed
+      }
+    }
+  }
+
+  // 4. Default fallback
+  return "python3";
+}
+
+// Cache detected Python path
+let cachedPythonPath: string | null = null;
+
+function getPythonPath(): string {
+  if (cachedPythonPath === null) {
+    cachedPythonPath = detectPythonPath();
+  }
+  return cachedPythonPath;
+}
+
 const DEFAULT_CONFIG: XCometConfig = {
   model: "Unbabel/XCOMET-XL",
-  pythonPath: "python3",
+  get pythonPath() {
+    return getPythonPath();
+  },
   timeout: 300000, // 300 seconds (5 minutes) - increased for model loading
 };
 
@@ -291,20 +384,21 @@ export class XCometService {
   /**
    * Check if xCOMET is available
    */
-  async checkAvailability(): Promise<{ available: boolean; message: string }> {
+  async checkAvailability(): Promise<{ available: boolean; message: string; pythonPath?: string }> {
     const script = `
 import json
+import sys
 import warnings
 warnings.filterwarnings("ignore")
 try:
     from comet import download_model
-    print(json.dumps({"available": True, "message": "xCOMET is available"}))
+    print(json.dumps({"available": True, "message": "xCOMET is available", "pythonPath": sys.executable}))
 except ImportError:
-    print(json.dumps({"available": False, "message": "unbabel-comet is not installed. Run: pip install 'unbabel-comet>=2.2.0'"}))
+    print(json.dumps({"available": False, "message": "unbabel-comet is not installed. Run: pip install 'unbabel-comet>=2.2.0'", "pythonPath": sys.executable}))
 `;
 
     try {
-      const result = await executePython<{ available: boolean; message: string }>(
+      const result = await executePython<{ available: boolean; message: string; pythonPath?: string }>(
         script,
         this.config
       );
@@ -313,8 +407,16 @@ except ImportError:
       return {
         available: false,
         message: `Python execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        pythonPath: this.config.pythonPath,
       };
     }
+  }
+
+  /**
+   * Get the Python path being used
+   */
+  getPythonPath(): string {
+    return this.config.pythonPath;
   }
 
   /**

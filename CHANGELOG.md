@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-12-21
+
+### Added
+
+- **Python Auto-Detection**: Automatically finds Python with `unbabel-comet` installed
+  - Checks `XCOMET_PYTHON_PATH` environment variable first
+  - Scans pyenv versions for compatible Python
+  - Falls back to Homebrew Python paths
+  - Resolves issues when MCP host uses different Python than terminal
+
+### Fixed
+
+- Fixed "No module named 'comet'" error when MCP server runs in environments without pyenv (e.g., Claude Desktop, Claude Code)
+
 ## [0.2.0] - 2025-12-21
 
 ### Added

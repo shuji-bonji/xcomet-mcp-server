@@ -204,7 +204,33 @@ sequenceDiagram
 | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `PORT` | `3000` | HTTP server port (when TRANSPORT=http) |
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | xCOMET model to use |
-| `PYTHON_PATH` | `python3` | Python executable path |
+| `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
+
+### Python Path Auto-Detection
+
+The server automatically detects a Python environment with `unbabel-comet` installed:
+
+1. **`XCOMET_PYTHON_PATH`** environment variable (if set)
+2. **pyenv** versions (`~/.pyenv/versions/*/bin/python3`) - checks for `comet` module
+3. **Homebrew** Python (`/opt/homebrew/bin/python3`, `/usr/local/bin/python3`)
+4. **Fallback**: `python3` command
+
+This ensures the server works correctly even when the MCP host (e.g., Claude Desktop) uses a different Python than your terminal.
+
+**Example: Explicit configuration in Claude Desktop**
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "node",
+      "args": ["/path/to/xcomet-mcp-server/dist/index.js"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "/Users/you/.pyenv/versions/3.13.5/bin/python3"
+      }
+    }
+  }
+}
+```
 
 ### Model Options
 
