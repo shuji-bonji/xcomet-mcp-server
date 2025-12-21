@@ -36,5 +36,17 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "bin": {
+    "xcomet-mcp-server": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
