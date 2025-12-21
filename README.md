@@ -64,7 +64,7 @@ npm run build
 
 ## 🚀 Usage
 
-### With Claude Desktop
+### With Claude Desktop (npx)
 
 Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
@@ -72,8 +72,8 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 {
   "mcpServers": {
     "xcomet": {
-      "command": "node",
-      "args": ["/path/to/xcomet-mcp-server/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "xcomet-mcp-server"]
     }
   }
 }
@@ -82,7 +82,26 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 ### With Claude Code
 
 ```bash
-claude mcp add xcomet node /path/to/xcomet-mcp-server/dist/index.js
+claude mcp add xcomet -- npx -y xcomet-mcp-server
+```
+
+### Local Installation
+
+If you prefer a local installation:
+
+```bash
+npm install -g xcomet-mcp-server
+```
+
+Then configure:
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "xcomet-mcp-server"
+    }
+  }
+}
 ```
 
 ### HTTP Mode (Remote Access)

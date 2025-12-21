@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2025-12-22
+
+### Added
+
+- **npx Support**: Added shebang for direct execution via `npx xcomet-mcp-server`
+- **prepublishOnly**: Automatic build before npm publish
+
+### Changed
+
+- **Improved Error Messages**: Better guidance when Python or unbabel-comet is not found
+  - Shows specific installation instructions
+  - Displays detected Python path for debugging
+  - Suggests `XCOMET_PYTHON_PATH` environment variable
+
+### Fixed
+
+- Fixed SERVER_VERSION mismatch (was showing 0.1.0)
+
 ## [0.2.1] - 2025-12-21
 
 ### Added

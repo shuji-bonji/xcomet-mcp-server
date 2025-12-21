@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
-    "inspect": "npx @modelcontextprotocol/inspector"
+    "inspect": "npx @modelcontextprotocol/inspector",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",

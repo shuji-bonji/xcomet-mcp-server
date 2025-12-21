@@ -404,10 +404,29 @@ except ImportError:
       );
       return result;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const pythonPath = this.config.pythonPath;
+
+      // Provide helpful error messages based on the error type
+      let message: string;
+      if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
+        message = `Python not found at "${pythonPath}". Please install Python 3.8+ and unbabel-comet:\n` +
+          `  1. Install Python: https://www.python.org/downloads/\n` +
+          `  2. Install xCOMET: pip install 'unbabel-comet>=2.2.0'\n` +
+          `  3. Set XCOMET_PYTHON_PATH environment variable if using pyenv/venv`;
+      } else if (errorMessage.includes("No module named 'comet'")) {
+        message = `unbabel-comet not installed in ${pythonPath}. Run:\n` +
+          `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.0'`;
+      } else {
+        message = `Python execution failed: ${errorMessage}\n` +
+          `Python path: ${pythonPath}\n` +
+          `Tip: Set XCOMET_PYTHON_PATH to specify Python with unbabel-comet installed`;
+      }
+
       return {
         available: false,
-        message: `Python execution failed: ${error instanceof Error ? error.message : String(error)}`,
-        pythonPath: this.config.pythonPath,
+        message,
+        pythonPath,
       };
     }
   }
