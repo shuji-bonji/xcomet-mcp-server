@@ -104,6 +104,7 @@ Examples:
         source_lang: EvaluateInputSchema.shape.source_lang,
         target_lang: EvaluateInputSchema.shape.target_lang,
         response_format: EvaluateInputSchema.shape.response_format,
+        use_gpu: EvaluateInputSchema.shape.use_gpu,
       },
       outputSchema: {
         score: EvaluateOutputSchema.shape.score,
@@ -122,7 +123,8 @@ Examples:
         const result = await xCometService.evaluate(
           params.source,
           params.translation,
-          params.reference
+          params.reference,
+          params.use_gpu
         );
 
         const text =
@@ -195,6 +197,7 @@ Examples:
         reference: DetectErrorsInputSchema.shape.reference,
         min_severity: DetectErrorsInputSchema.shape.min_severity,
         response_format: DetectErrorsInputSchema.shape.response_format,
+        use_gpu: DetectErrorsInputSchema.shape.use_gpu,
       },
       outputSchema: {
         total_errors: DetectErrorsOutputSchema.shape.total_errors,
@@ -214,7 +217,8 @@ Examples:
           params.source,
           params.translation,
           params.reference,
-          params.min_severity
+          params.min_severity,
+          params.use_gpu
         );
 
         const text =
@@ -284,6 +288,8 @@ Examples:
         source_lang: BatchEvaluateInputSchema.shape.source_lang,
         target_lang: BatchEvaluateInputSchema.shape.target_lang,
         response_format: BatchEvaluateInputSchema.shape.response_format,
+        use_gpu: BatchEvaluateInputSchema.shape.use_gpu,
+        batch_size: BatchEvaluateInputSchema.shape.batch_size,
       },
       outputSchema: {
         average_score: BatchEvaluateOutputSchema.shape.average_score,
@@ -300,7 +306,11 @@ Examples:
     },
     async (params: BatchEvaluateInput) => {
       try {
-        const result = await xCometService.batchEvaluate(params.pairs);
+        const result = await xCometService.batchEvaluate(
+          params.pairs,
+          params.batch_size,
+          params.use_gpu
+        );
 
         const text =
           params.response_format === "markdown"

@@ -13,6 +13,14 @@ export const ResponseFormat = z.enum(["json", "markdown"]);
 export type ResponseFormat = z.infer<typeof ResponseFormat>;
 
 /**
+ * GPU usage option - allows user/AI to choose CPU or GPU processing
+ */
+export const UseGpuSchema = z
+  .boolean()
+  .default(false)
+  .describe("Use GPU for inference (faster if available). Default: false (CPU only)");
+
+/**
  * Single translation pair for evaluation
  */
 export const TranslationPairSchema = z.object({
@@ -54,6 +62,7 @@ export const EvaluateInputSchema = z.object({
   response_format: ResponseFormat.default("json").describe(
     "Output format: 'json' for structured data or 'markdown' for human-readable"
   ),
+  use_gpu: UseGpuSchema,
 });
 export type EvaluateInput = z.infer<typeof EvaluateInputSchema>;
 
@@ -95,6 +104,7 @@ export const DetectErrorsInputSchema = z.object({
     "Minimum severity level to report (minor, major, critical)"
   ),
   response_format: ResponseFormat.default("json").describe("Output format"),
+  use_gpu: UseGpuSchema,
 });
 export type DetectErrorsInput = z.infer<typeof DetectErrorsInputSchema>;
 
@@ -136,6 +146,14 @@ export const BatchEvaluateInputSchema = z.object({
   source_lang: z.string().length(2).optional().describe("Source language code"),
   target_lang: z.string().length(2).optional().describe("Target language code"),
   response_format: ResponseFormat.default("json").describe("Output format"),
+  use_gpu: UseGpuSchema,
+  batch_size: z
+    .number()
+    .int()
+    .min(1)
+    .max(64)
+    .default(8)
+    .describe("Batch size for GPU processing (1-64). Larger = faster but uses more memory. Default: 8"),
 });
 export type BatchEvaluateInput = z.infer<typeof BatchEvaluateInputSchema>;
 
