@@ -1,5 +1,6 @@
 # xCOMET MCP Server
 
+[![npm version](https://img.shields.io/npm/v/xcomet-mcp-server.svg)](https://www.npmjs.com/package/xcomet-mcp-server)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-blue)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -214,6 +215,31 @@ sequenceDiagram
 2. **Evaluate** using xCOMET MCP Server
 3. **Iterate** if quality is below threshold
 
+### Example: DeepL + xCOMET Integration
+
+Configure both servers in Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "deepl": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/deepl-mcp-server"],
+      "env": {
+        "DEEPL_API_KEY": "your-api-key"
+      }
+    },
+    "xcomet": {
+      "command": "npx",
+      "args": ["-y", "xcomet-mcp-server"]
+    }
+  }
+}
+```
+
+Then ask Claude:
+> "Translate this text to Japanese using DeepL, then evaluate the translation quality with xCOMET. If the score is below 0.8, suggest improvements."
+
 ## ⚙️ Configuration
 
 ### Environment Variables
@@ -224,6 +250,31 @@ sequenceDiagram
 | `PORT` | `3000` | HTTP server port (when TRANSPORT=http) |
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | xCOMET model to use |
 | `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
+
+### Model Selection
+
+Choose the model based on your quality/performance needs:
+
+| Model | Parameters | Size | Quality | Use Case |
+|-------|------------|------|---------|----------|
+| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | ⭐⭐⭐⭐ | Recommended for most use cases |
+| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | ⭐⭐⭐⭐⭐ | Highest quality, requires more resources |
+
+**To use a different model**, set the `XCOMET_MODEL` environment variable:
+
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "npx",
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_MODEL": "Unbabel/XCOMET-XXL"
+      }
+    }
+  }
+}
+```
 
 ### Python Path Auto-Detection
 
@@ -236,27 +287,20 @@ The server automatically detects a Python environment with `unbabel-comet` insta
 
 This ensures the server works correctly even when the MCP host (e.g., Claude Desktop) uses a different Python than your terminal.
 
-**Example: Explicit configuration in Claude Desktop**
+**Example: Explicit Python path configuration**
 ```json
 {
   "mcpServers": {
     "xcomet": {
-      "command": "node",
-      "args": ["/path/to/xcomet-mcp-server/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "xcomet-mcp-server"],
       "env": {
-        "XCOMET_PYTHON_PATH": "/Users/you/.pyenv/versions/3.13.5/bin/python3"
+        "XCOMET_PYTHON_PATH": "/Users/you/.pyenv/versions/3.11.0/bin/python3"
       }
     }
   }
 }
 ```
-
-### Model Options
-
-| Model | Parameters | Size | Quality |
-|-------|------------|------|---------|
-| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | Recommended |
-| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | Highest |
 
 ## ⚡ Performance
 
@@ -287,6 +331,66 @@ The `xcomet_batch_evaluate` tool is optimized to load the xCOMET model only once
 | 0.7 - 0.9 | Good | Minor review recommended |
 | 0.5 - 0.7 | Fair | Post-editing needed |
 | 0.0 - 0.5 | Poor | Re-translation recommended |
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+#### "No module named 'comet'"
+
+**Cause**: Python environment without `unbabel-comet` installed.
+
+**Solution**:
+```bash
+# Check which Python is being used
+python3 -c "import sys; print(sys.executable)"
+
+# Install unbabel-comet
+pip install "unbabel-comet>=2.2.0"
+
+# Or specify Python path explicitly
+export XCOMET_PYTHON_PATH=/path/to/python3
+```
+
+#### Model download fails or times out
+
+**Cause**: Large model files (~14GB for XL) require stable internet connection.
+
+**Solution**:
+```bash
+# Pre-download the model manually
+python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
+```
+
+#### GPU not detected
+
+**Cause**: PyTorch not installed with CUDA support.
+
+**Solution**:
+```bash
+# Check CUDA availability
+python -c "import torch; print(torch.cuda.is_available())"
+
+# If False, reinstall PyTorch with CUDA
+pip install torch --index-url https://download.pytorch.org/whl/cu118
+```
+
+#### Slow performance on Mac (MPS)
+
+**Cause**: Mac MPS (Metal Performance Shaders) has compatibility issues with some operations.
+
+**Solution**: The server automatically uses `num_workers=1` for Mac MPS compatibility. For best performance on Mac, use CPU mode (`use_gpu: false`).
+
+### Getting Help
+
+If you encounter issues:
+
+1. Check the [GitHub Issues](https://github.com/shuji-bonji/xcomet-mcp-server/issues)
+2. Enable debug logging by checking Claude Desktop's Developer Mode logs
+3. Open a new issue with:
+   - Your OS and Python version
+   - The error message
+   - Your configuration (without sensitive data)
 
 ## 🧪 Development
 
