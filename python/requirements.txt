@@ -1,0 +1,7 @@
+# xCOMET Server dependencies
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# xCOMET (should already be installed)
+unbabel-comet>=2.2.0

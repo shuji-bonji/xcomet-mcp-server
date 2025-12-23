@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
@@ -43,6 +43,7 @@
   },
   "files": [
     "dist",
+    "python",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

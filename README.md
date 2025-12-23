@@ -17,22 +17,24 @@ xCOMET MCP Server provides AI agents with the ability to evaluate machine transl
 
 ```mermaid
 graph LR
-    A[AI Agent] --> B[xCOMET MCP Server]
-    B --> C[xCOMET Model]
-    C --> D[Quality Score + Errors]
-    D --> A
-    
-    style B fill:#9f9
+    A[AI Agent] --> B[Node.js MCP Server]
+    B --> C[Python FastAPI Server]
+    C --> D[xCOMET Model<br/>Persistent in Memory]
+    D --> C
+    C --> B
+    B --> A
+
+    style D fill:#9f9
 ```
 
 ## 🔧 Prerequisites
 
 ### Python Environment
 
-xCOMET requires Python with the `unbabel-comet` package:
+xCOMET requires Python with the following packages:
 
 ```bash
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.0" fastapi uvicorn
 ```
 
 ### Model Download
@@ -168,7 +170,7 @@ Focus on detecting and categorizing translation errors.
 
 Evaluate multiple translation pairs in a single request.
 
-> **Performance Note**: This tool is optimized to load the model only once for all pairs, making it significantly faster than evaluating pairs individually. For 100 pairs, this reduces processing time from ~50 minutes to ~1-2 minutes on CPU.
+> **Performance Note**: With the persistent server architecture (v0.3.0+), the model stays loaded in memory. Batch evaluation processes all pairs efficiently without reloading the model.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -309,15 +311,38 @@ This ensures the server works correctly even when the MCP host (e.g., Claude Des
 
 ## ⚡ Performance
 
+### Persistent Server Architecture (v0.3.0+)
+
+The server uses a **persistent Python FastAPI server** that keeps the xCOMET model loaded in memory:
+
+| Request | Time | Notes |
+|---------|------|-------|
+| First request | ~25-90s | Model loading (varies by model size) |
+| Subsequent requests | **~500ms** | Model already loaded |
+
+This provides a **177x speedup** for consecutive evaluations compared to reloading the model each time.
+
+```mermaid
+graph LR
+    A[MCP Request] --> B[Node.js Server]
+    B --> C[Python FastAPI Server]
+    C --> D[xCOMET Model<br/>in Memory]
+    D --> C
+    C --> B
+    B --> A
+
+    style D fill:#9f9
+```
+
 ### Batch Processing Optimization
 
-The `xcomet_batch_evaluate` tool is optimized to load the xCOMET model only once, regardless of the number of pairs:
+The `xcomet_batch_evaluate` tool processes all pairs with a single model load:
 
-| Pairs | Without Optimization | With Optimization | Speedup |
-|-------|---------------------|-------------------|---------|
-| 10 | ~5 min | ~40 sec | ~7.5x |
-| 50 | ~25 min | ~1.5 min | ~17x |
-| 100 | ~50 min | ~2 min | ~25x |
+| Pairs | Estimated Time |
+|-------|----------------|
+| 10 | ~30-40 sec |
+| 50 | ~1-1.5 min |
+| 100 | ~2 min |
 
 ### GPU vs CPU Performance
 
@@ -328,27 +353,25 @@ The `xcomet_batch_evaluate` tool is optimized to load the xCOMET model only once
 
 > **Note**: GPU requires CUDA-compatible hardware and PyTorch with CUDA support. If GPU is not available, set `use_gpu: false` (default).
 
-### Best Practices for Large-Scale Evaluation
+### Best Practices
 
-When evaluating many translation pairs (e.g., multiple files), follow these guidelines for optimal performance:
+**1. Let the persistent server do its job**
 
-**1. Batch all pairs in a single call**
+With v0.3.0+, the model stays in memory. Multiple `xcomet_evaluate` calls are now efficient:
 
 ```
-❌ Bad: Multiple calls (slow - model loads each time)
-   for each file:
-     xcomet_batch_evaluate(file.pairs)  # ~25s model load per call
-
-✅ Good: Single call with all pairs (fast - model loads once)
-   xcomet_batch_evaluate(allPairs)  # ~25s model load total
+✅ Fast: First call loads model, subsequent calls reuse it
+   xcomet_evaluate(pair1)  # ~90s (model loads)
+   xcomet_evaluate(pair2)  # ~500ms (model cached)
+   xcomet_evaluate(pair3)  # ~500ms (model cached)
 ```
 
-**2. Time breakdown**
+**2. For many pairs, use batch evaluation**
 
-| Operation | Time |
-|-----------|------|
-| Model loading | ~25 seconds (once per call) |
-| Inference | ~3-5 seconds per 100 pairs |
+```
+✅ Even faster: Batch all pairs in one call
+   xcomet_batch_evaluate(allPairs)  # Optimal throughput
+```
 
 **3. Memory considerations**
 
@@ -378,8 +401,8 @@ When evaluating many translation pairs (e.g., multiple files), follow these guid
 # Check which Python is being used
 python3 -c "import sys; print(sys.executable)"
 
-# Install unbabel-comet
-pip install "unbabel-comet>=2.2.0"
+# Install all required packages
+pip install "unbabel-comet>=2.2.0" fastapi uvicorn
 
 # Or specify Python path explicitly
 export XCOMET_PYTHON_PATH=/path/to/python3
@@ -416,12 +439,12 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 
 #### High memory usage or crashes
 
-**Cause**: XCOMET-XL requires ~8-10GB RAM. Multiple consecutive evaluations can cause memory spikes.
+**Cause**: XCOMET-XL requires ~8-10GB RAM.
 
 **Solutions**:
-1. **Batch your evaluations**: Use a single `xcomet_batch_evaluate` call instead of multiple `xcomet_evaluate` calls
-2. **Reduce batch size**: If memory is limited, process in smaller batches (100-200 pairs)
-3. **Use a lighter model**: Consider `Unbabel/wmt22-comet-da` for lower memory usage (see Model Selection)
+1. **Use the persistent server** (v0.3.0+): Model loads once and stays in memory, avoiding repeated memory spikes
+2. **Use a lighter model**: Set `XCOMET_MODEL=Unbabel/wmt22-comet-da` for lower memory usage (~3GB)
+3. **Reduce batch size**: For large batches, process in smaller chunks (100-200 pairs)
 4. **Close other applications**: Free up RAM before running large evaluations
 
 ```bash
@@ -432,12 +455,12 @@ vm_stat | head -5  # macOS
 
 #### VS Code or IDE crashes during evaluation
 
-**Cause**: Memory spikes when loading the model repeatedly.
+**Cause**: High memory usage from the xCOMET model (~8-10GB for XL).
 
 **Solution**:
-- Batch all translation pairs into a single `xcomet_batch_evaluate` call
-- Model loads once per call (~25s), then inference is fast (~3-5s per 100 pairs)
-- Avoid calling `xcomet_evaluate` in a loop
+- With v0.3.0+, the model loads once and stays in memory (no repeated loading)
+- If memory is still an issue, use a lighter model: `XCOMET_MODEL=Unbabel/wmt22-comet-da`
+- Close other memory-intensive applications before evaluation
 
 ### Getting Help
 

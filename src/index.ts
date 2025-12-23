@@ -4,10 +4,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { registerTools } from "./tools/index.js";
+import { shutdownServer } from "./services/xcomet.js";
 
 // Server metadata
 const SERVER_NAME = "xcomet-mcp-server";
-const SERVER_VERSION = "0.2.3";
+const SERVER_VERSION = "0.3.0";
 
 /**
  * Create and configure the MCP server
@@ -78,10 +79,29 @@ async function runHTTP(): Promise<void> {
 }
 
 /**
+ * Graceful shutdown handler
+ */
+async function gracefulShutdown(signal: string): Promise<void> {
+  console.error(`[xcomet] Received ${signal}, shutting down...`);
+  try {
+    await shutdownServer();
+    console.error("[xcomet] Shutdown complete");
+    process.exit(0);
+  } catch (error) {
+    console.error("[xcomet] Shutdown error:", error);
+    process.exit(1);
+  }
+}
+
+/**
  * Main entry point
  */
 async function main(): Promise<void> {
   const transport = process.env.TRANSPORT || "stdio";
+
+  // Register shutdown handlers
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
   try {
     if (transport === "http") {
@@ -91,6 +111,7 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     console.error("Server error:", error);
+    await shutdownServer();
     process.exit(1);
   }
 }

@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-12-24
+
+### Added
+
+- **Persistent Python Server**: FastAPI-based server keeps the xCOMET model in memory
+  - First request loads model (~25-90s depending on model size)
+  - Subsequent requests are **177x faster** (~500ms vs ~90s)
+  - No more model reloading between evaluations
+- **Graceful Shutdown**: Proper cleanup of Python subprocess on SIGTERM/SIGINT
+- **Health Check Endpoint**: Server status monitoring via `/health`
+
+### Changed
+
+- **Architecture Overhaul**: Replaced subprocess-per-request with persistent HTTP server
+  - Node.js manages Python FastAPI server lifecycle
+  - HTTP communication between Node.js and Python
+  - Automatic port allocation and process management
+- **New Python Dependencies**: `fastapi`, `uvicorn`, `pydantic` now required
+
+### Performance
+
+| Request | Before (v0.2.x) | After (v0.3.0) | Improvement |
+|---------|-----------------|----------------|-------------|
+| First request | ~90s | ~90s | - |
+| Subsequent requests | ~90s | ~500ms | **177x faster** |
+| 10 consecutive evals | ~15 min | ~30s | **30x faster** |
+
+### Prerequisites
+
+```bash
+# New Python dependencies required
+pip install fastapi uvicorn
+```
+
 ## [0.2.3] - 2025-12-24
 
 ### Added
