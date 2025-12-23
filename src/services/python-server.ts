@@ -17,6 +17,8 @@ export interface PythonServerConfig {
   model?: string;
   maxRetries?: number;
   healthCheckInterval?: number;
+  maxRestarts?: number;
+  preload?: boolean;
 }
 
 interface ServerState {
@@ -25,6 +27,8 @@ interface ServerState {
   ready: boolean;
   starting: boolean;
   error: string | null;
+  restartCount: number;
+  consecutiveFailures: number;
 }
 
 /**
@@ -104,11 +108,14 @@ export class PythonServerManager {
     ready: false,
     starting: false,
     error: null,
+    restartCount: 0,
+    consecutiveFailures: 0,
   };
 
   private config: Required<PythonServerConfig>;
   private healthCheckTimer: NodeJS.Timeout | null = null;
   private startPromise: Promise<void> | null = null;
+  private isRestarting: boolean = false;
 
   constructor(config: PythonServerConfig = {}) {
     this.config = {
@@ -116,6 +123,8 @@ export class PythonServerManager {
       model: config.model || process.env.XCOMET_MODEL || "Unbabel/XCOMET-XL",
       maxRetries: config.maxRetries ?? 3,
       healthCheckInterval: config.healthCheckInterval ?? 30000,
+      maxRestarts: config.maxRestarts ?? 3,
+      preload: config.preload ?? (process.env.XCOMET_PRELOAD?.toLowerCase() === "true"),
     };
   }
 
@@ -177,6 +186,7 @@ export class PythonServerManager {
         ...process.env,
         PORT: "0", // Let the server pick a random port
         XCOMET_MODEL: this.config.model,
+        XCOMET_PRELOAD: this.config.preload ? "true" : "false",
         PYTHONWARNINGS: "ignore",
         TOKENIZERS_PARALLELISM: "false",
       },
@@ -366,11 +376,59 @@ export class PythonServerManager {
     this.healthCheckTimer = setInterval(async () => {
       try {
         await this.healthCheck();
+        // Reset consecutive failures on success
+        this.state.consecutiveFailures = 0;
       } catch (error) {
-        console.error("[xcomet] Health check failed:", error);
-        // Could implement auto-restart here
+        this.state.consecutiveFailures++;
+        console.error(`[xcomet] Health check failed (${this.state.consecutiveFailures}/3):`, error);
+
+        // Auto-restart after 3 consecutive failures
+        if (this.state.consecutiveFailures >= 3) {
+          await this.attemptRestart();
+        }
       }
     }, this.config.healthCheckInterval);
+  }
+
+  /**
+   * Attempt to restart the server
+   */
+  private async attemptRestart(): Promise<void> {
+    if (this.isRestarting) {
+      return;
+    }
+
+    if (this.state.restartCount >= this.config.maxRestarts) {
+      console.error(`[xcomet] Max restarts (${this.config.maxRestarts}) reached, giving up`);
+      return;
+    }
+
+    this.isRestarting = true;
+    this.state.restartCount++;
+    console.error(`[xcomet] Attempting restart (${this.state.restartCount}/${this.config.maxRestarts})...`);
+
+    try {
+      // Stop the current server
+      this.stopHealthCheck();
+      if (this.state.process) {
+        this.state.process.kill("SIGTERM");
+        this.state.process = null;
+      }
+      this.state.ready = false;
+      this.state.port = null;
+      this.state.consecutiveFailures = 0;
+
+      // Wait a bit before restarting
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Start a new server
+      await this._start();
+      console.error("[xcomet] Server restarted successfully");
+    } catch (error) {
+      console.error("[xcomet] Restart failed:", error);
+    } finally {
+      this.isRestarting = false;
+    }
   }
 
   /**
@@ -409,6 +467,29 @@ export class PythonServerManager {
    */
   getModel(): string {
     return this.config.model;
+  }
+
+  /**
+   * Get server statistics
+   */
+  async getStats(): Promise<{
+    uptime_seconds: number | null;
+    model_loaded: boolean;
+    model_load_time_ms: number | null;
+    evaluation_count: number;
+    batch_count: number;
+    total_pairs_evaluated: number;
+    total_inference_time_ms: number;
+    avg_inference_time_ms: number | null;
+  }> {
+    return this.request("/stats", "GET", undefined, 5000);
+  }
+
+  /**
+   * Get restart count
+   */
+  getRestartCount(): number {
+    return this.state.restartCount;
   }
 }
 

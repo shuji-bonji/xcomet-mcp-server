@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",

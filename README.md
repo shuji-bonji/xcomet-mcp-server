@@ -252,6 +252,7 @@ Then ask Claude:
 | `PORT` | `3000` | HTTP server port (when TRANSPORT=http) |
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | xCOMET model to use |
 | `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
+| `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
 
 ### Model Selection
 
@@ -322,6 +323,26 @@ The server uses a **persistent Python FastAPI server** that keeps the xCOMET mod
 
 This provides a **177x speedup** for consecutive evaluations compared to reloading the model each time.
 
+### Eager Loading (v0.3.1+)
+
+Enable `XCOMET_PRELOAD=true` to pre-load the model at server startup:
+
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "npx",
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_PRELOAD": "true"
+      }
+    }
+  }
+}
+```
+
+With preload enabled, **all requests are fast** (~500ms), including the first one.
+
 ```mermaid
 graph LR
     A[MCP Request] --> B[Node.js Server]
@@ -378,6 +399,13 @@ With v0.3.0+, the model stays in memory. Multiple `xcomet_evaluate` calls are no
 - XCOMET-XL requires ~8-10GB RAM
 - For large batches (500 pairs), ensure sufficient memory
 - If memory is limited, split into smaller batches (100-200 pairs)
+
+### Auto-Restart (v0.3.1+)
+
+The server automatically recovers from failures:
+- Monitors health every 30 seconds
+- Restarts after 3 consecutive health check failures
+- Up to 3 restart attempts before giving up
 
 ## 📊 Quality Score Interpretation
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-12-24
+
+### Added
+
+- **Eager Loading** (`XCOMET_PRELOAD=true`): Pre-load model at server startup
+  - First request is instant (~500ms) when enabled
+  - Set `XCOMET_PRELOAD=true` environment variable to enable
+- **Statistics Endpoint** (`/stats`): Monitor server performance
+  - Uptime, evaluation count, average inference time
+  - Model load time tracking
+- **Auto Restart**: Automatic recovery from failures
+  - Restarts after 3 consecutive health check failures
+  - Up to 3 restart attempts with backoff
+
+### Changed
+
+- Improved health check with failure tracking
+
 ## [0.3.0] - 2025-12-24
 
 ### Added

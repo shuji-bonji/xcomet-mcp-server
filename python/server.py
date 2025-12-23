@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import signal
+import time
 import warnings
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -23,6 +24,16 @@ import uvicorn
 # Global model instance
 _model = None
 _model_name = None
+
+# Statistics
+_stats = {
+    "start_time": None,
+    "model_load_time": None,
+    "evaluation_count": 0,
+    "batch_count": 0,
+    "total_pairs_evaluated": 0,
+    "total_inference_time_ms": 0,
+}
 
 
 class EvaluateRequest(BaseModel):
@@ -54,18 +65,20 @@ class DetectErrorsRequest(BaseModel):
 
 def get_model():
     """Lazy load the model on first request."""
-    global _model, _model_name
+    global _model, _model_name, _stats
 
     if _model is None:
         model_name = os.environ.get("XCOMET_MODEL", "Unbabel/XCOMET-XL")
         print(f"[xcomet-server] Loading model: {model_name}", file=sys.stderr)
 
+        load_start = time.time()
         from comet import download_model, load_from_checkpoint
         model_path = download_model(model_name)
         _model = load_from_checkpoint(model_path)
         _model_name = model_name
+        _stats["model_load_time"] = round((time.time() - load_start) * 1000)
 
-        print(f"[xcomet-server] Model loaded successfully", file=sys.stderr)
+        print(f"[xcomet-server] Model loaded successfully in {_stats['model_load_time']}ms", file=sys.stderr)
 
     return _model
 
@@ -79,7 +92,15 @@ def model_requires_reference(model_name: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown."""
+    global _stats
+    _stats["start_time"] = time.time()
     print(f"[xcomet-server] Starting on port {os.environ.get('PORT', 'unknown')}", file=sys.stderr)
+
+    # Eager loading if XCOMET_PRELOAD is set
+    if os.environ.get("XCOMET_PRELOAD", "").lower() in ("true", "1", "yes"):
+        print("[xcomet-server] Preloading model (XCOMET_PRELOAD=true)...", file=sys.stderr)
+        get_model()
+
     yield
     print("[xcomet-server] Shutting down...", file=sys.stderr)
 
@@ -98,9 +119,36 @@ async def health():
     }
 
 
+@app.get("/stats")
+async def stats():
+    """Get server statistics."""
+    global _stats, _model
+
+    uptime_seconds = None
+    if _stats["start_time"]:
+        uptime_seconds = round(time.time() - _stats["start_time"])
+
+    total_requests = _stats["evaluation_count"] + _stats["batch_count"]
+    avg_inference_time_ms = None
+    if total_requests > 0:
+        avg_inference_time_ms = round(_stats["total_inference_time_ms"] / total_requests)
+
+    return {
+        "uptime_seconds": uptime_seconds,
+        "model_loaded": _model is not None,
+        "model_load_time_ms": _stats["model_load_time"],
+        "evaluation_count": _stats["evaluation_count"],
+        "batch_count": _stats["batch_count"],
+        "total_pairs_evaluated": _stats["total_pairs_evaluated"],
+        "total_inference_time_ms": _stats["total_inference_time_ms"],
+        "avg_inference_time_ms": avg_inference_time_ms,
+    }
+
+
 @app.post("/evaluate")
 async def evaluate(request: EvaluateRequest):
     """Evaluate a single translation."""
+    global _stats
     try:
         model = get_model()
         model_name = os.environ.get("XCOMET_MODEL", "Unbabel/XCOMET-XL")
@@ -120,7 +168,14 @@ async def evaluate(request: EvaluateRequest):
             data[0]["ref"] = request.reference
 
         gpus = 1 if request.use_gpu else 0
+        inference_start = time.time()
         output = model.predict(data, batch_size=1, gpus=gpus, num_workers=1)
+        inference_time = round((time.time() - inference_start) * 1000)
+
+        # Update stats
+        _stats["evaluation_count"] += 1
+        _stats["total_pairs_evaluated"] += 1
+        _stats["total_inference_time_ms"] += inference_time
 
         score = float(output.scores[0])
         errors = []
@@ -201,6 +256,7 @@ async def detect_errors(request: DetectErrorsRequest):
 @app.post("/batch_evaluate")
 async def batch_evaluate(request: BatchEvaluateRequest):
     """Evaluate multiple translations in a batch."""
+    global _stats
     try:
         if not request.pairs:
             return {
@@ -231,7 +287,14 @@ async def batch_evaluate(request: BatchEvaluateRequest):
             data.append(item)
 
         gpus = 1 if request.use_gpu else 0
+        inference_start = time.time()
         output = model.predict(data, batch_size=request.batch_size, gpus=gpus, num_workers=1)
+        inference_time = round((time.time() - inference_start) * 1000)
+
+        # Update stats
+        _stats["batch_count"] += 1
+        _stats["total_pairs_evaluated"] += len(request.pairs)
+        _stats["total_inference_time_ms"] += inference_time
 
         # Build results
         results = []
