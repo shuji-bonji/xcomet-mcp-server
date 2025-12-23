@@ -7,7 +7,7 @@ import { registerTools } from "./tools/index.js";
 
 // Server metadata
 const SERVER_NAME = "xcomet-mcp-server";
-const SERVER_VERSION = "0.2.2";
+const SERVER_VERSION = "0.2.3";
 
 /**
  * Create and configure the MCP server

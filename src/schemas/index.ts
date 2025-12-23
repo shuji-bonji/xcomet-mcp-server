@@ -141,7 +141,7 @@ export const BatchEvaluateInputSchema = z.object({
   pairs: z
     .array(TranslationPairSchema)
     .min(1, "At least one translation pair is required")
-    .max(100, "Maximum 100 pairs per batch")
+    .max(500, "Maximum 500 pairs per batch")
     .describe("Array of translation pairs to evaluate"),
   source_lang: z.string().length(2).optional().describe("Source language code"),
   target_lang: z.string().length(2).optional().describe("Target language code"),

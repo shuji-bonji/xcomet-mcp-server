@@ -101,8 +101,37 @@ function getPythonPath(): string {
   return cachedPythonPath;
 }
 
+/**
+ * Get model from environment variable or use default
+ */
+function getModel(): string {
+  return process.env.XCOMET_MODEL || "Unbabel/XCOMET-XL";
+}
+
+/**
+ * Models that require a reference translation
+ * - wmt22-comet-da and similar models need reference for evaluation
+ * - XCOMET models support referenceless evaluation
+ */
+const REFERENCE_REQUIRED_MODELS = [
+  "Unbabel/wmt22-comet-da",
+  "Unbabel/wmt20-comet-da",
+  "Unbabel/wmt21-comet-da",
+];
+
+/**
+ * Check if the given model requires a reference translation
+ */
+function modelRequiresReference(model: string): boolean {
+  return REFERENCE_REQUIRED_MODELS.some(
+    (refModel) => model.toLowerCase().includes(refModel.toLowerCase().replace("unbabel/", ""))
+  );
+}
+
 const DEFAULT_CONFIG: XCometConfig = {
-  model: "Unbabel/XCOMET-XL",
+  get model() {
+    return getModel();
+  },
   get pythonPath() {
     return getPythonPath();
   },
@@ -439,6 +468,13 @@ except ImportError:
   }
 
   /**
+   * Get the model being used
+   */
+  getModel(): string {
+    return this.config.model;
+  }
+
+  /**
    * Evaluate translation quality
    * @param useGpu - Use GPU for inference (faster if available)
    */
@@ -448,6 +484,14 @@ except ImportError:
     reference?: string,
     useGpu: boolean = false
   ): Promise<EvaluateOutput> {
+    // Validate reference requirement for specific models
+    if (!reference && modelRequiresReference(this.config.model)) {
+      throw new Error(
+        `Model "${this.config.model}" requires a reference translation. ` +
+        `Please provide the 'reference' parameter, or use an XCOMET model (e.g., Unbabel/XCOMET-XL) for referenceless evaluation.`
+      );
+    }
+
     const script = generateEvaluateScript(source, translation, reference, this.config.model, useGpu);
 
     const result = await executePython<EvaluateOutput | { error: string }>(script, this.config);
@@ -514,6 +558,18 @@ except ImportError:
         results: [],
         summary: "No pairs to evaluate.",
       };
+    }
+
+    // Validate reference requirement for specific models
+    if (modelRequiresReference(this.config.model)) {
+      const missingRefCount = pairs.filter((p) => !p.reference).length;
+      if (missingRefCount > 0) {
+        throw new Error(
+          `Model "${this.config.model}" requires reference translations. ` +
+          `${missingRefCount} of ${pairs.length} pairs are missing 'reference'. ` +
+          `Please provide references for all pairs, or use an XCOMET model (e.g., Unbabel/XCOMET-XL) for referenceless evaluation.`
+        );
+      }
     }
 
     // Generate batch processing script (model loaded once for all pairs)

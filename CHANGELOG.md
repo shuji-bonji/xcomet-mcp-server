@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2025-12-24
+
+### Added
+
+- **XCOMET_MODEL environment variable**: Now supports model selection via environment variable
+  - Example: `XCOMET_MODEL=Unbabel/wmt22-comet-da`
+  - Default: `Unbabel/XCOMET-XL`
+- **Reference validation**: Models like `wmt22-comet-da` now properly validate that `reference` is provided
+  - Clear error message when reference is missing
+  - Suggests using XCOMET models for referenceless evaluation
+
+### Changed
+
+- **Increased max pairs limit**: 100 → 500 pairs per batch for large-scale evaluation
+- **Added lightweight model option**: Documented `Unbabel/wmt22-comet-da` as alternative (580M params, ~3GB memory)
+
+### Documentation
+
+- **Best Practices section**: Guidelines for optimal batch processing
+  - Batch all pairs in single call to avoid repeated model loading
+  - Time breakdown (model load ~25s, inference ~3-5s per 100 pairs)
+  - Memory considerations for large batches
+- **Memory troubleshooting**: Solutions for high memory usage and IDE crashes
+- **Model comparison table**: Added memory requirements and use cases
+
 ## [0.2.2] - 2025-12-22
 
 ### Added

@@ -173,7 +173,7 @@ Evaluate multiple translation pairs in a single request.
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `pairs` | array | ✅ | Array of {source, translation, reference?} (max 100) |
+| `pairs` | array | ✅ | Array of {source, translation, reference?} (max 500) |
 | `source_lang` | string | ❌ | Source language code |
 | `target_lang` | string | ❌ | Target language code |
 | `response_format` | "json" \| "markdown" | ❌ | Output format |
@@ -255,10 +255,15 @@ Then ask Claude:
 
 Choose the model based on your quality/performance needs:
 
-| Model | Parameters | Size | Quality | Use Case |
-|-------|------------|------|---------|----------|
-| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | ⭐⭐⭐⭐ | Recommended for most use cases |
-| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | ⭐⭐⭐⭐⭐ | Highest quality, requires more resources |
+| Model | Parameters | Size | Memory | Reference | Quality | Use Case |
+|-------|------------|------|--------|-----------|---------|----------|
+| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | ~8-10GB | Optional | ⭐⭐⭐⭐ | Recommended for most use cases |
+| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | ~20GB | Optional | ⭐⭐⭐⭐⭐ | Highest quality, requires more resources |
+| `Unbabel/wmt22-comet-da` | 580M | ~2GB | ~3GB | **Required** | ⭐⭐⭐ | Lightweight, faster loading |
+
+> **Important**: `wmt22-comet-da` requires a `reference` translation for evaluation. XCOMET models support referenceless evaluation.
+
+> **Tip**: If you experience memory issues or slow model loading, try `Unbabel/wmt22-comet-da` for faster performance with slightly lower accuracy (but remember to provide reference translations).
 
 **To use a different model**, set the `XCOMET_MODEL` environment variable:
 
@@ -323,6 +328,34 @@ The `xcomet_batch_evaluate` tool is optimized to load the xCOMET model only once
 
 > **Note**: GPU requires CUDA-compatible hardware and PyTorch with CUDA support. If GPU is not available, set `use_gpu: false` (default).
 
+### Best Practices for Large-Scale Evaluation
+
+When evaluating many translation pairs (e.g., multiple files), follow these guidelines for optimal performance:
+
+**1. Batch all pairs in a single call**
+
+```
+❌ Bad: Multiple calls (slow - model loads each time)
+   for each file:
+     xcomet_batch_evaluate(file.pairs)  # ~25s model load per call
+
+✅ Good: Single call with all pairs (fast - model loads once)
+   xcomet_batch_evaluate(allPairs)  # ~25s model load total
+```
+
+**2. Time breakdown**
+
+| Operation | Time |
+|-----------|------|
+| Model loading | ~25 seconds (once per call) |
+| Inference | ~3-5 seconds per 100 pairs |
+
+**3. Memory considerations**
+
+- XCOMET-XL requires ~8-10GB RAM
+- For large batches (500 pairs), ensure sufficient memory
+- If memory is limited, split into smaller batches (100-200 pairs)
+
 ## 📊 Quality Score Interpretation
 
 | Score Range | Quality | Recommendation |
@@ -380,6 +413,31 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 **Cause**: Mac MPS (Metal Performance Shaders) has compatibility issues with some operations.
 
 **Solution**: The server automatically uses `num_workers=1` for Mac MPS compatibility. For best performance on Mac, use CPU mode (`use_gpu: false`).
+
+#### High memory usage or crashes
+
+**Cause**: XCOMET-XL requires ~8-10GB RAM. Multiple consecutive evaluations can cause memory spikes.
+
+**Solutions**:
+1. **Batch your evaluations**: Use a single `xcomet_batch_evaluate` call instead of multiple `xcomet_evaluate` calls
+2. **Reduce batch size**: If memory is limited, process in smaller batches (100-200 pairs)
+3. **Use a lighter model**: Consider `Unbabel/wmt22-comet-da` for lower memory usage (see Model Selection)
+4. **Close other applications**: Free up RAM before running large evaluations
+
+```bash
+# Check available memory
+free -h  # Linux
+vm_stat | head -5  # macOS
+```
+
+#### VS Code or IDE crashes during evaluation
+
+**Cause**: Memory spikes when loading the model repeatedly.
+
+**Solution**:
+- Batch all translation pairs into a single `xcomet_batch_evaluate` call
+- Model loads once per call (~25s), then inference is fast (~3-5s per 100 pairs)
+- Avoid calling `xcomet_evaluate` in a loop
 
 ### Getting Help
 
