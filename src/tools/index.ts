@@ -120,6 +120,9 @@ Examples:
     },
     async (params: EvaluateInput) => {
       try {
+        // Note: source_lang and target_lang are accepted for API compatibility
+        // but not currently used by xCOMET. Reserved for future model versions
+        // that may support language-specific evaluation.
         const result = await xCometService.evaluate(
           params.source,
           params.translation,
@@ -306,6 +309,8 @@ Examples:
     },
     async (params: BatchEvaluateInput) => {
       try {
+        // Note: source_lang and target_lang are accepted for API compatibility
+        // but not currently used by xCOMET. Reserved for future model versions.
         const result = await xCometService.batchEvaluate(
           params.pairs,
           params.batch_size,

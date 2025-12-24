@@ -18,10 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Auto Restart**: Automatic recovery from failures
   - Restarts after 3 consecutive health check failures
   - Up to 3 restart attempts with backoff
+- **Debug Logging** (`XCOMET_DEBUG=true`): Verbose logging for troubleshooting
+  - Set `XCOMET_DEBUG=true` to enable detailed logs
 
 ### Changed
 
 - Improved health check with failure tracking
+- Graceful shutdown now waits for current request to complete
+- Code quality improvements:
+  - Replaced `require()` with ESM `import` for consistency
+  - Extracted magic numbers to named constants
+  - Added comments for reserved parameters (`source_lang`, `target_lang`)
+
+### Fixed
+
+- **Race condition on startup**: Wait for uvicorn to be ready before sending requests
+  - Previously, requests could fail with "fetch failed" if sent immediately after port detection
 
 ## [0.3.0] - 2025-12-24
 

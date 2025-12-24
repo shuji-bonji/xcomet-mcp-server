@@ -9,6 +9,7 @@ import sys
 import json
 import signal
 import time
+import asyncio
 import warnings
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -347,7 +348,13 @@ async def batch_evaluate(request: BatchEvaluateRequest):
 async def shutdown():
     """Graceful shutdown endpoint."""
     print("[xcomet-server] Shutdown requested", file=sys.stderr)
-    os.kill(os.getpid(), signal.SIGTERM)
+
+    # Schedule shutdown after a short delay to allow current request to complete
+    async def delayed_shutdown():
+        await asyncio.sleep(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(delayed_shutdown())
     return {"status": "shutting_down"}
 
 

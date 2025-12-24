@@ -253,6 +253,7 @@ Then ask Claude:
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | xCOMET model to use |
 | `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
 | `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
+| `XCOMET_DEBUG` | `false` | Enable verbose debug logging (v0.3.1+) |
 
 ### Model Selection
 
