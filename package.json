@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
@@ -8,6 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "inspect": "npx @modelcontextprotocol/inspector",
     "prepublishOnly": "npm run build"
   },
@@ -33,7 +35,8 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.16"
   },
   "engines": {
     "node": ">=18.0.0"

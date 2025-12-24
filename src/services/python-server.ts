@@ -219,8 +219,9 @@ export class PythonServerManager {
 
     this.state.process = proc;
 
-    // Handle stdout to get the port
+    // Handle stdout to get the port (line-buffered for chunked JSON)
     let portReceived = false;
+    let stdoutBuffer = "";
     const portPromise = new Promise<number>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (!portReceived) {
@@ -229,17 +230,26 @@ export class PythonServerManager {
       }, SERVER_START_TIMEOUT);
 
       proc.stdout?.on("data", (data: Buffer) => {
-        const output = data.toString().trim();
-        try {
-          const json = JSON.parse(output);
-          if (json.port) {
-            portReceived = true;
-            clearTimeout(timeout);
-            resolve(json.port);
+        stdoutBuffer += data.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const json = JSON.parse(trimmed);
+            if (json.port) {
+              portReceived = true;
+              clearTimeout(timeout);
+              resolve(json.port);
+              return;
+            }
+          } catch {
+            // Not JSON, log and continue
+            debugLog(`[xcomet-python] ${trimmed}`);
           }
-        } catch {
-          // Not JSON, ignore
-          debugLog(`[xcomet-python] ${output}`);
         }
       });
 
@@ -339,11 +349,20 @@ export class PythonServerManager {
 
     log("[xcomet] Stopping Python server...");
 
-    // Try graceful shutdown first
-    try {
-      await this.request("/shutdown", "POST", {}, 2000);
-    } catch {
-      // Ignore errors during shutdown
+    // Try graceful shutdown first - direct fetch to avoid start() being called
+    if (this.state.port) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        await fetch(`http://127.0.0.1:${this.state.port}/shutdown`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch {
+        // Ignore errors during shutdown
+      }
     }
 
     // Wait for process to exit or kill it
@@ -538,8 +557,9 @@ export class PythonServerManager {
     uptime_seconds: number | null;
     model_loaded: boolean;
     model_load_time_ms: number | null;
-    evaluation_count: number;
-    batch_count: number;
+    evaluate_api_count: number;
+    detect_errors_api_count: number;
+    batch_api_count: number;
     total_pairs_evaluated: number;
     total_inference_time_ms: number;
     avg_inference_time_ms: number | null;

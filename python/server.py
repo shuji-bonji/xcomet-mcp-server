@@ -30,9 +30,10 @@ _model_name = None
 _stats = {
     "start_time": None,
     "model_load_time": None,
-    "evaluation_count": 0,
-    "batch_count": 0,
-    "total_pairs_evaluated": 0,
+    "evaluate_api_count": 0,       # /evaluate endpoint calls
+    "detect_errors_api_count": 0,  # /detect_errors endpoint calls
+    "batch_api_count": 0,          # /batch_evaluate endpoint calls
+    "total_pairs_evaluated": 0,    # Total pairs evaluated (including internal calls)
     "total_inference_time_ms": 0,
 }
 
@@ -129,17 +130,22 @@ async def stats():
     if _stats["start_time"]:
         uptime_seconds = round(time.time() - _stats["start_time"])
 
-    total_requests = _stats["evaluation_count"] + _stats["batch_count"]
+    total_api_calls = (
+        _stats["evaluate_api_count"]
+        + _stats["detect_errors_api_count"]
+        + _stats["batch_api_count"]
+    )
     avg_inference_time_ms = None
-    if total_requests > 0:
-        avg_inference_time_ms = round(_stats["total_inference_time_ms"] / total_requests)
+    if total_api_calls > 0:
+        avg_inference_time_ms = round(_stats["total_inference_time_ms"] / total_api_calls)
 
     return {
         "uptime_seconds": uptime_seconds,
         "model_loaded": _model is not None,
         "model_load_time_ms": _stats["model_load_time"],
-        "evaluation_count": _stats["evaluation_count"],
-        "batch_count": _stats["batch_count"],
+        "evaluate_api_count": _stats["evaluate_api_count"],
+        "detect_errors_api_count": _stats["detect_errors_api_count"],
+        "batch_api_count": _stats["batch_api_count"],
         "total_pairs_evaluated": _stats["total_pairs_evaluated"],
         "total_inference_time_ms": _stats["total_inference_time_ms"],
         "avg_inference_time_ms": avg_inference_time_ms,
@@ -174,7 +180,7 @@ async def evaluate(request: EvaluateRequest):
         inference_time = round((time.time() - inference_start) * 1000)
 
         # Update stats
-        _stats["evaluation_count"] += 1
+        _stats["evaluate_api_count"] += 1
         _stats["total_pairs_evaluated"] += 1
         _stats["total_inference_time_ms"] += inference_time
 
@@ -218,7 +224,11 @@ async def evaluate(request: EvaluateRequest):
 @app.post("/detect_errors")
 async def detect_errors(request: DetectErrorsRequest):
     """Detect errors in a translation."""
+    global _stats
     try:
+        # Count this API call (before calling evaluate internally)
+        _stats["detect_errors_api_count"] += 1
+
         # Get evaluation result first
         eval_request = EvaluateRequest(
             source=request.source,
@@ -293,7 +303,7 @@ async def batch_evaluate(request: BatchEvaluateRequest):
         inference_time = round((time.time() - inference_start) * 1000)
 
         # Update stats
-        _stats["batch_count"] += 1
+        _stats["batch_api_count"] += 1
         _stats["total_pairs_evaluated"] += len(request.pairs)
         _stats["total_inference_time_ms"] += inference_time
 
@@ -359,26 +369,27 @@ async def shutdown():
 
 
 if __name__ == "__main__":
+    import socket
+
     port = int(os.environ.get("PORT", "0"))
 
-    # If port is 0, let uvicorn pick a random available port
+    # Create socket first to get the actual port (avoids race condition)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", port))
+    actual_port = sock.getsockname()[1]
+
+    # Notify Node.js of the actual port before starting uvicorn
+    print(json.dumps({"port": actual_port}), flush=True)
+
     config = uvicorn.Config(
         app,
         host="127.0.0.1",
-        port=port,
-        log_level="warning"
+        port=actual_port,
+        log_level="warning",
+        fd=sock.fileno(),  # Pass socket file descriptor
     )
     server = uvicorn.Server(config)
 
-    # Print the actual port to stdout for the Node.js process to read
-    if port == 0:
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(('127.0.0.1', 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        config.port = port
-
-    print(json.dumps({"port": port}), flush=True)
-
-    server.run()
+    # Run with the pre-bound socket
+    server.run(sockets=[sock])

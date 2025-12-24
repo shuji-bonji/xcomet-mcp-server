@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2025-12-25
+
+### Fixed
+
+- **Port detection robustness**: Use line-buffered stdout parsing to handle chunked JSON output
+- **Stop race condition**: Avoid calling start() during stop() to prevent spawning extra processes
+- **Port binding race**: Get actual bound port after uvicorn startup instead of bind-then-close pattern
+
+### Changed
+
+- **Statistics clarity**: Separate API call counts by endpoint for clearer metrics
+  - `evaluate_api_count`: /evaluate endpoint calls
+  - `detect_errors_api_count`: /detect_errors endpoint calls
+  - `batch_api_count`: /batch_evaluate endpoint calls
+  - `total_pairs_evaluated`: Total pairs evaluated (including internal calls)
+
 ## [0.3.2] - 2025-12-24
 
 ### Fixed
