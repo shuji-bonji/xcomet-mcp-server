@@ -11,19 +11,21 @@ graph TD
         B --> C[line-buffer.test.ts]
         B --> D[stop-race-condition.test.ts]
         B --> E[integration.test.ts]
+        B --> F[user-scenarios.test.ts]
     end
 
     subgraph "テスト対象"
-        C --> F[ポート検出<br/>チャンク処理]
-        D --> G[stop関数<br/>レース条件]
-        E --> H[Pythonサーバー<br/>統合テスト]
+        C --> G[ポート検出<br/>チャンク処理]
+        D --> H[stop関数<br/>レース条件]
+        E --> I[Pythonサーバー<br/>統合テスト]
+        F --> J[利用者視点<br/>シナリオテスト]
     end
 
-    subgraph "修正された問題"
-        F --> I["Fix #1: stdout分割"]
-        G --> J["Fix #2: start()呼出回避"]
-        H --> K["Fix #3: ポートバインド"]
-        H --> L["Fix #4: 統計カウント"]
+    subgraph "カテゴリ"
+        G --> K["Fix #1: stdout分割"]
+        H --> L["Fix #2: start()呼出回避"]
+        I --> M["Fix #3,4: ポート/統計"]
+        J --> N["エッジケース/品質/性能"]
     end
 ```
 
@@ -34,7 +36,8 @@ graph TD
 | `line-buffer.test.ts` | 9 | ユニット | TypeScript |
 | `stop-race-condition.test.ts` | 5 | ユニット | TypeScript |
 | `integration.test.ts` | 5 | 統合 | Python + TypeScript |
-| **合計** | **19** | - | - |
+| `user-scenarios.test.ts` | 28 | E2E | 利用者シナリオ |
+| **合計** | **47** | - | - |
 
 ---
 
@@ -200,6 +203,129 @@ graph LR
     A1 -.->|分離| B2
     A2 -.->|名称変更| B3
 ```
+
+---
+
+## 4. 利用者シナリオテスト (`user-scenarios.test.ts`)
+
+### テスト概要
+
+実際の利用者視点でのエンドツーエンドテストです。xCOMET モデルを使用した品質評価の実際の動作を検証します。
+
+```mermaid
+graph TD
+    subgraph "1. 境界値・エッジケース"
+        A1[空文字列]
+        A2[長文テキスト]
+        A3[特殊文字・絵文字]
+        A4[コードブロック]
+        A5[HTMLタグ]
+        A6[改行・空白]
+    end
+
+    subgraph "2. 言語ペア"
+        B1[ja → en/de/fr/es/it]
+        B2[en → ja]
+        B3[zh → en]
+        B4[ko → en]
+    end
+
+    subgraph "3. エラーハンドリング"
+        C1[null値]
+        C2[必須フィールド欠落]
+        C3[不正なJSON]
+        C4[大量バッチ]
+    end
+
+    subgraph "4. 品質検証"
+        D1[明らかな誤訳]
+        D2[訳抜け]
+        D3[不自然な訳]
+        D4[正確な訳]
+        D5[エラー検出API]
+    end
+
+    subgraph "5. パフォーマンス"
+        E1[連続リクエスト]
+        E2[並列リクエスト]
+        E3[応答時間安定性]
+        E4[高負荷耐性]
+    end
+```
+
+### テストケース一覧
+
+#### 1. 境界値・エッジケース (6テスト)
+
+| テスト名 | 説明 | タイムアウト |
+|---------|------|------------|
+| `should handle empty strings gracefully` | 空文字列の処理 | 90秒 |
+| `should handle very long text` | 長文（900文字+）の処理 | 120秒 |
+| `should handle special characters and emojis` | `🚀 @user #tag $100` など | - |
+| `should handle code blocks in text` | `` `map()` `` などのコード | - |
+| `should handle HTML tags in text` | `<code>` タグなど | - |
+| `should handle newlines and whitespace` | 改行・タブの処理 | - |
+
+#### 2. 言語ペア (8テスト)
+
+| 言語ペア | ソース例 | 翻訳例 |
+|---------|---------|-------|
+| ja → en | こんにちは | Hello |
+| ja → de | こんにちは | Hallo |
+| ja → fr | こんにちは | Bonjour |
+| ja → es | こんにちは | Hola |
+| ja → it | こんにちは | Ciao |
+| en → ja | Hello | こんにちは |
+| zh → en | 你好 | Hello |
+| ko → en | 안녕하세요 | Hello |
+
+#### 3. エラーハンドリング (5テスト)
+
+| テスト名 | 期待するステータス |
+|---------|------------------|
+| `should reject null source` | 400 or 422 |
+| `should reject missing translation field` | 400 or 422 |
+| `should handle invalid JSON gracefully` | 400 or 422 |
+| `should handle batch with maximum pairs (500)` | 200 |
+| `should reject batch exceeding maximum pairs` | 200, 400, 413, or 422 |
+
+#### 4. 品質検証シナリオ (5テスト)
+
+```mermaid
+graph LR
+    subgraph "入力"
+        A1["非同期処理"] --> B1["synchronous processing"]
+        A2["RxJSは強力で柔軟なライブラリです"] --> B2["RxJS is a library"]
+        A3["購読を解除する"] --> B3["cancel the subscription following"]
+        A4["ユーザー認証が完了しました"] --> B4["User authentication completed"]
+    end
+
+    subgraph "検証"
+        B1 --> C1["誤訳検出"]
+        B2 --> C2["訳抜け検出"]
+        B3 --> C3["不自然さ検出"]
+        B4 --> C4["高スコア期待"]
+    end
+```
+
+#### 5. パフォーマンス・安定性 (4テスト)
+
+| テスト名 | 説明 |
+|---------|------|
+| `should handle sequential requests` | 10件の連続リクエスト |
+| `should handle concurrent requests` | 5件の並列リクエスト |
+| `should maintain stable response times` | 応答時間の標準偏差を測定 |
+| `should recover from rapid requests` | 20件の高速リクエスト後の復旧 |
+
+### パフォーマンス指標（参考値）
+
+```
+Sequential requests: avg=584ms, min=573ms, max=608ms
+Concurrent requests (5): total=2916ms
+Stability: avg=591ms, stdDev=19ms
+```
+
+> **Note**: 上記の値は環境により大きく異なります。初回リクエストはモデルロード時間（25-90秒）がかかります。
 
 ---
 
