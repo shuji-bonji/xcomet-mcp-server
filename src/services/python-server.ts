@@ -3,7 +3,7 @@
  * Manages a persistent Python FastAPI server for xCOMET inference.
  */
 
-import { spawn, ChildProcess, execSync } from "child_process";
+import { spawn, ChildProcess, execFileSync } from "child_process";
 import { existsSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
@@ -88,7 +88,8 @@ function detectPythonPath(): string {
         const pythonPath = join(pyenvDir, version, "bin", "python3");
         if (existsSync(pythonPath)) {
           try {
-            execSync(`${pythonPath} -c "import comet; import fastapi"`, {
+            // Use execFileSync with args array to handle paths with spaces safely
+            execFileSync(pythonPath, ["-c", "import comet; import fastapi"], {
               timeout: 5000,
               stdio: "ignore",
             });
@@ -108,7 +109,8 @@ function detectPythonPath(): string {
   for (const path of brewPaths) {
     if (existsSync(path)) {
       try {
-        execSync(`${path} -c "import comet; import fastapi"`, {
+        // Use execFileSync with args array to handle paths with spaces safely
+        execFileSync(path, ["-c", "import comet; import fastapi"], {
           timeout: 5000,
           stdio: "ignore",
         });
@@ -300,6 +302,18 @@ export class PythonServerManager {
     } catch (error) {
       this.state.starting = false;
       this.state.error = error instanceof Error ? error.message : String(error);
+
+      // Kill orphaned process to prevent resource leak
+      if (proc && !proc.killed) {
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          // Ignore kill errors (process may have already exited)
+        }
+      }
+      this.state.process = null;
+      this.state.port = null;
+
       throw error;
     }
   }

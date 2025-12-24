@@ -11,6 +11,7 @@ import signal
 import time
 import asyncio
 import warnings
+import threading
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -25,6 +26,7 @@ import uvicorn
 # Global model instance
 _model = None
 _model_name = None
+_model_lock = threading.Lock()
 
 # Statistics
 _stats = {
@@ -66,10 +68,19 @@ class DetectErrorsRequest(BaseModel):
 
 
 def get_model():
-    """Lazy load the model on first request."""
+    """Lazy load the model on first request. Thread-safe with lock."""
     global _model, _model_name, _stats
 
-    if _model is None:
+    # Fast path: model already loaded (no lock needed)
+    if _model is not None:
+        return _model
+
+    # Slow path: need to load model (with lock to prevent double loading)
+    with _model_lock:
+        # Double-check after acquiring lock
+        if _model is not None:
+            return _model
+
         model_name = os.environ.get("XCOMET_MODEL", "Unbabel/XCOMET-XL")
         print(f"[xcomet-server] Loading model: {model_name}", file=sys.stderr)
 
@@ -152,69 +163,82 @@ async def stats():
     }
 
 
+def _evaluate_internal(source: str, translation: str, reference: Optional[str], use_gpu: bool):
+    """
+    Internal evaluation function. Does NOT update API call statistics.
+    Returns (result_dict, inference_time_ms).
+    """
+    model = get_model()
+    model_name = os.environ.get("XCOMET_MODEL", "Unbabel/XCOMET-XL")
+
+    # Validate reference requirement
+    if not reference and model_requires_reference(model_name):
+        raise ValueError(f'Model "{model_name}" requires a reference translation.')
+
+    data = [{
+        "src": source,
+        "mt": translation,
+    }]
+    if reference:
+        data[0]["ref"] = reference
+
+    gpus = 1 if use_gpu else 0
+    inference_start = time.time()
+    output = model.predict(data, batch_size=1, gpus=gpus, num_workers=1)
+    inference_time = round((time.time() - inference_start) * 1000)
+
+    score = float(output.scores[0])
+    errors = []
+
+    # Extract error spans if available
+    if hasattr(output, 'metadata') and output.metadata:
+        metadata = output.metadata[0]
+        if metadata and 'error_spans' in metadata:
+            for span in metadata['error_spans']:
+                errors.append({
+                    "text": span.get("text", ""),
+                    "start": span.get("start", 0),
+                    "end": span.get("end", 0),
+                    "severity": span.get("severity", "minor")
+                })
+
+    # Generate summary
+    if score >= 0.9:
+        quality = "Excellent"
+    elif score >= 0.7:
+        quality = "Good"
+    elif score >= 0.5:
+        quality = "Fair"
+    else:
+        quality = "Poor"
+
+    result = {
+        "score": score,
+        "errors": errors,
+        "summary": f"{quality} quality (score: {score:.3f}) with {len(errors)} error(s) detected."
+    }
+
+    return result, inference_time
+
+
 @app.post("/evaluate")
 async def evaluate(request: EvaluateRequest):
     """Evaluate a single translation."""
     global _stats
     try:
-        model = get_model()
-        model_name = os.environ.get("XCOMET_MODEL", "Unbabel/XCOMET-XL")
+        result, inference_time = _evaluate_internal(
+            request.source, request.translation, request.reference, request.use_gpu
+        )
 
-        # Validate reference requirement
-        if not request.reference and model_requires_reference(model_name):
-            raise HTTPException(
-                status_code=400,
-                detail=f'Model "{model_name}" requires a reference translation.'
-            )
-
-        data = [{
-            "src": request.source,
-            "mt": request.translation,
-        }]
-        if request.reference:
-            data[0]["ref"] = request.reference
-
-        gpus = 1 if request.use_gpu else 0
-        inference_start = time.time()
-        output = model.predict(data, batch_size=1, gpus=gpus, num_workers=1)
-        inference_time = round((time.time() - inference_start) * 1000)
-
-        # Update stats
+        # Update stats (only for direct API calls)
         _stats["evaluate_api_count"] += 1
         _stats["total_pairs_evaluated"] += 1
         _stats["total_inference_time_ms"] += inference_time
 
-        score = float(output.scores[0])
-        errors = []
+        return result
 
-        # Extract error spans if available
-        if hasattr(output, 'metadata') and output.metadata:
-            metadata = output.metadata[0]
-            if metadata and 'error_spans' in metadata:
-                for span in metadata['error_spans']:
-                    errors.append({
-                        "text": span.get("text", ""),
-                        "start": span.get("start", 0),
-                        "end": span.get("end", 0),
-                        "severity": span.get("severity", "minor")
-                    })
-
-        # Generate summary
-        if score >= 0.9:
-            quality = "Excellent"
-        elif score >= 0.7:
-            quality = "Good"
-        elif score >= 0.5:
-            quality = "Fair"
-        else:
-            quality = "Poor"
-
-        return {
-            "score": score,
-            "errors": errors,
-            "summary": f"{quality} quality (score: {score:.3f}) with {len(errors)} error(s) detected."
-        }
-
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -226,17 +250,15 @@ async def detect_errors(request: DetectErrorsRequest):
     """Detect errors in a translation."""
     global _stats
     try:
-        # Count this API call (before calling evaluate internally)
-        _stats["detect_errors_api_count"] += 1
-
-        # Get evaluation result first
-        eval_request = EvaluateRequest(
-            source=request.source,
-            translation=request.translation,
-            reference=request.reference,
-            use_gpu=request.use_gpu
+        # Get evaluation result using internal function (no double counting)
+        eval_result, inference_time = _evaluate_internal(
+            request.source, request.translation, request.reference, request.use_gpu
         )
-        eval_result = await evaluate(eval_request)
+
+        # Update stats (count as detect_errors API call, not evaluate)
+        _stats["detect_errors_api_count"] += 1
+        _stats["total_pairs_evaluated"] += 1
+        _stats["total_inference_time_ms"] += inference_time
 
         # Filter errors by severity
         severity_order = {"minor": 0, "major": 1, "critical": 2}
@@ -258,6 +280,8 @@ async def detect_errors(request: DetectErrorsRequest):
             "errors": [{"suggestion": None, **e} for e in filtered_errors]
         }
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

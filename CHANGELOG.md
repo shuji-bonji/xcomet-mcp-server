@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2025-12-25
+
+### Fixed
+
+- **Statistics double counting**: `detect_errors` no longer double-counts API calls when calling internal evaluate function
+  - Created `_evaluate_internal()` function for internal use without stats updates
+  - Each endpoint now correctly updates only its own statistics
+- **Process orphaning on startup failure**: Kill Python process if `portPromise` or `waitForServerReady()` fails
+- **Python path detection safety**: Changed `execSync` to `execFileSync` with args array to handle paths with spaces
+- **Thread-safe model loading**: Added `threading.Lock` with double-checked locking to prevent concurrent model loading
+
+### Added
+
+- Unofficial project disclaimer in README
+
 ## [0.3.3] - 2025-12-25
 
 ### Fixed
