@@ -8,7 +8,7 @@ import { shutdownServer } from "./services/xcomet.js";
 
 // Server metadata
 const SERVER_NAME = "xcomet-mcp-server";
-const SERVER_VERSION = "0.3.1";
+const SERVER_VERSION = "0.3.2";
 
 /**
  * Create and configure the MCP server
