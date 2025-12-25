@@ -45,7 +45,8 @@ async function runHTTP(): Promise<void> {
   const server = createServer();
   const app = express();
 
-  app.use(express.json());
+  const bodyLimit = process.env.MCP_BODY_LIMIT || "2mb";
+  app.use(express.json({ limit: bodyLimit }));
 
   // Health check endpoint
   app.get("/health", (_req, res) => {
@@ -57,18 +58,30 @@ async function runHTTP(): Promise<void> {
   });
 
   // MCP endpoint
-  app.post("/mcp", async (req, res) => {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
+  app.post("/mcp", async (req, res, next) => {
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
 
-    res.on("close", () => {
-      transport.close();
-    });
+      res.on("close", () => {
+        transport.close();
+      });
 
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("HTTP server error:", err);
+    if (res.headersSent) {
+      return;
+    }
+    res.status(500).json({ error: "Internal Server Error" });
   });
 
   const port = parseInt(process.env.PORT || "3000", 10);
