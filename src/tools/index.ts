@@ -11,6 +11,52 @@ import {
   type BatchEvaluateInput,
 } from "../schemas/index.js";
 import { xCometService } from "../services/xcomet.js";
+import { TOOL_DESCRIPTIONS } from "./descriptions.js";
+
+/**
+ * Common annotations for read-only evaluation tools
+ */
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+/**
+ * Create a standardized tool response
+ */
+function createToolResponse(
+  result: Record<string, unknown>,
+  responseFormat: "json" | "markdown" | undefined,
+  markdownTitle: string
+) {
+  const text =
+    responseFormat === "markdown"
+      ? formatAsMarkdown(result, markdownTitle)
+      : JSON.stringify(result, null, 2);
+
+  return {
+    content: [{ type: "text" as const, text }],
+    structuredContent: result,
+  };
+}
+
+/**
+ * Create a standardized error response
+ */
+function createErrorResponse(error: unknown, context: string) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Error ${context}: ${errorMessage}`,
+      },
+    ],
+    isError: true,
+  };
+}
 
 /**
  * Format output as markdown
@@ -63,40 +109,7 @@ export function registerTools(server: McpServer): void {
     "xcomet_evaluate",
     {
       title: "Evaluate Translation Quality",
-      description: `Evaluate the quality of a translation using xCOMET model.
-
-This tool analyzes a source text and its translation, providing:
-- A quality score between 0 and 1 (higher is better)
-- Detected error spans with severity levels (minor/major/critical)
-- A human-readable quality summary
-
-Args:
-  - source (string): Original source text to translate from
-  - translation (string): Translated text to evaluate
-  - reference (string, optional): Reference translation for comparison
-  - source_lang (string, optional): Source language code (ISO 639-1)
-  - target_lang (string, optional): Target language code (ISO 639-1)
-  - response_format ('json' | 'markdown'): Output format (default: 'json')
-
-Returns:
-  For JSON format:
-  {
-    "score": number,      // Quality score 0-1
-    "errors": [           // Detected errors
-      {
-        "text": string,
-        "start": number,
-        "end": number,
-        "severity": "minor" | "major" | "critical"
-      }
-    ],
-    "summary": string     // Human-readable summary
-  }
-
-Examples:
-  - Evaluate EN→JA translation quality
-  - Check if MT output needs post-editing
-  - Compare translation against reference`,
+      description: TOOL_DESCRIPTIONS.evaluate,
       inputSchema: {
         source: EvaluateInputSchema.shape.source,
         translation: EvaluateInputSchema.shape.translation,
@@ -111,45 +124,19 @@ Examples:
         errors: EvaluateOutputSchema.shape.errors,
         summary: EvaluateOutputSchema.shape.summary,
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_ANNOTATIONS,
     },
     async (params: EvaluateInput) => {
       try {
-        // Note: source_lang and target_lang are accepted for API compatibility
-        // but not currently used by xCOMET. Reserved for future model versions
-        // that may support language-specific evaluation.
         const result = await xCometService.evaluate(
           params.source,
           params.translation,
           params.reference,
           params.use_gpu
         );
-
-        const text =
-          params.response_format === "markdown"
-            ? formatAsMarkdown(result, "Translation Quality Evaluation")
-            : JSON.stringify(result, null, 2);
-
-        return {
-          content: [{ type: "text", text }],
-          structuredContent: result,
-        };
+        return createToolResponse(result, params.response_format, "Translation Quality Evaluation");
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error evaluating translation: ${errorMessage}`,
-            },
-          ],
-          isError: true,
-        };
+        return createErrorResponse(error, "evaluating translation");
       }
     }
   );
@@ -159,41 +146,7 @@ Examples:
     "xcomet_detect_errors",
     {
       title: "Detect Translation Errors",
-      description: `Detect and categorize errors in a translation.
-
-This tool focuses on error detection, providing detailed information about
-translation errors with their severity levels and positions.
-
-Args:
-  - source (string): Original source text
-  - translation (string): Translated text to analyze
-  - reference (string, optional): Reference translation
-  - min_severity ('minor' | 'major' | 'critical'): Minimum severity to report (default: 'minor')
-  - response_format ('json' | 'markdown'): Output format (default: 'json')
-
-Returns:
-  {
-    "total_errors": number,
-    "errors_by_severity": {
-      "minor": number,
-      "major": number,
-      "critical": number
-    },
-    "errors": [
-      {
-        "text": string,
-        "start": number,
-        "end": number,
-        "severity": "minor" | "major" | "critical",
-        "suggestion": string | null
-      }
-    ]
-  }
-
-Examples:
-  - Find critical errors before publication
-  - Identify areas needing post-editing
-  - Quality gate for MT output`,
+      description: TOOL_DESCRIPTIONS.detectErrors,
       inputSchema: {
         source: DetectErrorsInputSchema.shape.source,
         translation: DetectErrorsInputSchema.shape.translation,
@@ -207,12 +160,7 @@ Examples:
         errors_by_severity: DetectErrorsOutputSchema.shape.errors_by_severity,
         errors: DetectErrorsOutputSchema.shape.errors,
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_ANNOTATIONS,
     },
     async (params: DetectErrorsInput) => {
       try {
@@ -223,27 +171,9 @@ Examples:
           params.min_severity,
           params.use_gpu
         );
-
-        const text =
-          params.response_format === "markdown"
-            ? formatAsMarkdown(result, "Translation Error Detection")
-            : JSON.stringify(result, null, 2);
-
-        return {
-          content: [{ type: "text", text }],
-          structuredContent: result,
-        };
+        return createToolResponse(result, params.response_format, "Translation Error Detection");
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error detecting errors: ${errorMessage}`,
-            },
-          ],
-          isError: true,
-        };
+        return createErrorResponse(error, "detecting errors");
       }
     }
   );
@@ -253,39 +183,7 @@ Examples:
     "xcomet_batch_evaluate",
     {
       title: "Batch Evaluate Translations",
-      description: `Evaluate multiple translation pairs in a batch.
-
-This tool processes multiple source-translation pairs and provides
-aggregate statistics along with individual results.
-
-Args:
-  - pairs (array): Array of translation pairs, each with:
-    - source (string): Original source text
-    - translation (string): Translated text
-    - reference (string, optional): Reference translation
-  - source_lang (string, optional): Source language code
-  - target_lang (string, optional): Target language code
-  - response_format ('json' | 'markdown'): Output format (default: 'json')
-
-Returns:
-  {
-    "average_score": number,
-    "total_pairs": number,
-    "results": [
-      {
-        "index": number,
-        "score": number,
-        "error_count": number,
-        "has_critical_errors": boolean
-      }
-    ],
-    "summary": string
-  }
-
-Examples:
-  - Evaluate entire translated document
-  - Compare MT system quality across test set
-  - Identify segments needing attention`,
+      description: TOOL_DESCRIPTIONS.batchEvaluate,
       inputSchema: {
         pairs: BatchEvaluateInputSchema.shape.pairs,
         source_lang: BatchEvaluateInputSchema.shape.source_lang,
@@ -300,43 +198,18 @@ Examples:
         results: BatchEvaluateOutputSchema.shape.results,
         summary: BatchEvaluateOutputSchema.shape.summary,
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_ANNOTATIONS,
     },
     async (params: BatchEvaluateInput) => {
       try {
-        // Note: source_lang and target_lang are accepted for API compatibility
-        // but not currently used by xCOMET. Reserved for future model versions.
         const result = await xCometService.batchEvaluate(
           params.pairs,
           params.batch_size,
           params.use_gpu
         );
-
-        const text =
-          params.response_format === "markdown"
-            ? formatAsMarkdown(result, "Batch Translation Evaluation")
-            : JSON.stringify(result, null, 2);
-
-        return {
-          content: [{ type: "text", text }],
-          structuredContent: result,
-        };
+        return createToolResponse(result, params.response_format, "Batch Translation Evaluation");
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in batch evaluation: ${errorMessage}`,
-            },
-          ],
-          isError: true,
-        };
+        return createErrorResponse(error, "in batch evaluation");
       }
     }
   );
