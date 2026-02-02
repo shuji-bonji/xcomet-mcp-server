@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-02-03
+
+### Added
+
+- **CI/CD Workflows**: Automated testing and npm publishing
+  - `ci.yml`: Runs type check, tests, and build on push/PR to main
+  - `publish.yml`: Auto-publishes to npm when version tags are pushed
+  - Version verification ensures tag matches package.json
+
+- **Centralized Constants** (`src/config/constants.ts`):
+  - All hardcoded values moved to a single configuration file
+  - Server version now dynamically read from package.json
+  - Easier configuration management and future i18n support
+
+- **Centralized Error Messages** (`src/config/errors.ts`):
+  - Unified error messages for consistency
+  - Supports dynamic parameters (e.g., model names, attempt counts)
+  - Easier maintenance and future localization
+
+- **Test Utilities** (`tests/helpers/test-utils.ts`):
+  - Shared helpers for test files (reduced code duplication)
+  - `startServer()`, `stopServer()`, `waitForServerReady()`
+  - `createServerLifecycle()` for easy setup/teardown
+  - Custom `toBeOneOf` matcher
+
+- **Japanese Documentation** (`README.ja.md`):
+  - Full Japanese translation of README
+
+### Changed
+
+- **Code structure improvements**:
+  - Constants extracted from source files to `config/constants.ts`
+  - Error messages extracted to `config/errors.ts`
+  - Python path detection uses centralized package list
+  - Schema constraints use centralized constants
+
+- **Test refactoring**:
+  - Reduced redundant code across test files
+  - Tests now use shared utilities from `test-utils.ts`
+
+### Fixed
+
+- **Version mismatch**: SERVER_VERSION was hardcoded as "0.3.2" but package.json was "0.3.5"
+  - Now dynamically reads version from package.json
+
 ## [0.3.5] - 2025-12-27
 
 ### Changed

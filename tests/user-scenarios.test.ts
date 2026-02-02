@@ -9,111 +9,26 @@
  * - Performance and stability
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, ChildProcess, execSync } from "child_process";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import {
+  checkPythonDeps,
+  createServerLifecycle,
+  toBeOneOfMatcher,
+} from "./helpers/test-utils.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const serverScriptPath = join(__dirname, "..", "python", "server.py");
-
-// Check if Python dependencies are available
-function checkPythonDeps(): boolean {
-  try {
-    execSync('python3 -c "import fastapi; import uvicorn"', {
-      timeout: 5000,
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
+// Register custom matcher
+expect.extend(toBeOneOfMatcher);
 
 const hasPythonDeps = checkPythonDeps();
 
-// Helper to start server and get port
-async function startServer(): Promise<{ process: ChildProcess; port: number }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("Timeout waiting for server"));
-    }, 15000);
-
-    const proc = spawn("python3", [serverScriptPath], {
-      env: { ...process.env, PORT: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdoutBuffer = "";
-    proc.stdout?.on("data", (data: Buffer) => {
-      stdoutBuffer += data.toString();
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const json = JSON.parse(trimmed);
-          if (json.port) {
-            clearTimeout(timeout);
-            resolve({ process: proc, port: json.port });
-            return;
-          }
-        } catch {
-          // Not JSON
-        }
-      }
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
-}
-
-// Helper to wait for server ready
-async function waitForReady(port: number, maxAttempts = 50): Promise<void> {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
-        signal: AbortSignal.timeout(500),
-      });
-      if (res.ok) return;
-    } catch {
-      // Not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error("Server did not become ready");
-}
-
 describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
-  let serverProcess: ChildProcess | null = null;
-  let serverPort: number;
+  const server = createServerLifecycle();
 
   beforeAll(async () => {
-    const { process, port } = await startServer();
-    serverProcess = process;
-    serverPort = port;
-    await waitForReady(port);
+    await server.start();
   }, 30000);
 
   afterAll(async () => {
-    if (serverProcess) {
-      serverProcess.kill("SIGTERM");
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          serverProcess?.kill("SIGKILL");
-          resolve();
-        }, 3000);
-        serverProcess?.on("exit", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-    }
+    await server.stop();
   });
 
   // ============================================================
@@ -122,7 +37,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
   describe("1. Edge Cases and Boundary Values", () => {
     // Skip: Empty strings cause model to hang - needs server-side validation
     it.skip("should handle empty strings gracefully", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: "", translation: "" }),
@@ -138,7 +53,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       const longText = "これはテストです。".repeat(100); // ~900 chars
       const longTranslation = "This is a test. ".repeat(100);
 
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -155,7 +70,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     }, 200000);
 
     it("should handle special characters and emojis", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -170,7 +85,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     }, 120000);
 
     it("should handle code blocks in text", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -185,7 +100,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     }, 60000);
 
     it("should handle HTML tags in text", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -200,7 +115,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     }, 60000);
 
     it("should handle newlines and whitespace", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -232,7 +147,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
 
     for (const pair of languagePairs) {
       it(`should evaluate ${pair.name} translation`, async () => {
-        const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+        const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -255,7 +170,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
   // ============================================================
   describe("3. Error Handling", () => {
     it("should reject null source", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -268,7 +183,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should reject missing translation field", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -280,7 +195,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should handle invalid JSON gracefully", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{ invalid json }",
@@ -297,7 +212,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
           translation: `test ${i}`,
         }));
 
-      const response = await fetch(`http://127.0.0.1:${serverPort}/batch_evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/batch_evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pairs, batch_size: 32 }),
@@ -315,7 +230,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
           translation: `test ${i}`,
         }));
 
-      const response = await fetch(`http://127.0.0.1:${serverPort}/batch_evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/batch_evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pairs, batch_size: 32 }),
@@ -332,7 +247,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
   // ============================================================
   describe("4. Quality Validation Scenarios", () => {
     it("should detect obvious mistranslation (opposite meaning)", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -349,7 +264,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should detect partial translation (missing content)", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -364,7 +279,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should evaluate unnatural translation", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -379,7 +294,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should give high score to accurate translation", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -396,7 +311,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
     });
 
     it("should use detect_errors endpoint for error detection", async () => {
-      const response = await fetch(`http://127.0.0.1:${serverPort}/detect_errors`, {
+      const response = await fetch(`http://127.0.0.1:${server.port}/detect_errors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -423,7 +338,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
 
       for (let i = 0; i < 10; i++) {
         const start = Date.now();
-        const response = await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+        const response = await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -451,7 +366,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       const promises = Array(5)
         .fill(null)
         .map((_, i) =>
-          fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+          fetch(`http://127.0.0.1:${server.port}/evaluate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -476,7 +391,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       const times: number[] = [];
 
       // Warm up
-      await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+      await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: "ウォームアップ", translation: "warmup" }),
@@ -485,7 +400,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       // Measure 5 requests
       for (let i = 0; i < 5; i++) {
         const start = Date.now();
-        await fetch(`http://127.0.0.1:${serverPort}/evaluate`, {
+        await fetch(`http://127.0.0.1:${server.port}/evaluate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ source: "安定性テスト", translation: "stability test" }),
@@ -508,7 +423,7 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       const promises = Array(20)
         .fill(null)
         .map(() =>
-          fetch(`http://127.0.0.1:${serverPort}/health`, {
+          fetch(`http://127.0.0.1:${server.port}/health`, {
             signal: AbortSignal.timeout(5000),
           }).catch(() => null)
         );
@@ -516,32 +431,8 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
       await Promise.all(promises);
 
       // Server should still be responsive
-      const response = await fetch(`http://127.0.0.1:${serverPort}/health`);
+      const response = await fetch(`http://127.0.0.1:${server.port}/health`);
       expect(response.ok).toBe(true);
     });
   });
 });
-
-// Custom matcher for toBeOneOf
-expect.extend({
-  toBeOneOf(received: unknown, expected: unknown[]) {
-    const pass = expected.includes(received);
-    return {
-      pass,
-      message: () =>
-        pass
-          ? `expected ${received} not to be one of ${JSON.stringify(expected)}`
-          : `expected ${received} to be one of ${JSON.stringify(expected)}`,
-    };
-  },
-});
-
-declare module "vitest" {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface Assertion<T> {
-    toBeOneOf(expected: unknown[]): void;
-  }
-  interface AsymmetricMatchersContaining {
-    toBeOneOf(expected: unknown[]): void;
-  }
-}

@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  MAX_TEXT_LENGTH,
+  MAX_BATCH_PAIRS,
+  MIN_BATCH_SIZE,
+  MAX_BATCH_SIZE,
+  DEFAULT_BATCH_SIZE,
+} from "../config/constants.js";
 
 /**
  * Error severity levels according to MQM framework
@@ -37,16 +44,16 @@ export const EvaluateInputSchema = z.object({
   source: z
     .string()
     .min(1, "Source text is required")
-    .max(10000, "Source text must not exceed 10000 characters")
+    .max(MAX_TEXT_LENGTH, `Source text must not exceed ${MAX_TEXT_LENGTH} characters`)
     .describe("Original source text"),
   translation: z
     .string()
     .min(1, "Translation text is required")
-    .max(10000, "Translation text must not exceed 10000 characters")
+    .max(MAX_TEXT_LENGTH, `Translation text must not exceed ${MAX_TEXT_LENGTH} characters`)
     .describe("Translated text to evaluate"),
   reference: z
     .string()
-    .max(10000)
+    .max(MAX_TEXT_LENGTH)
     .optional()
     .describe("Optional reference translation for comparison"),
   source_lang: z
@@ -92,14 +99,14 @@ export const DetectErrorsInputSchema = z.object({
   source: z
     .string()
     .min(1, "Source text is required")
-    .max(10000)
+    .max(MAX_TEXT_LENGTH)
     .describe("Original source text"),
   translation: z
     .string()
     .min(1, "Translation text is required")
-    .max(10000)
+    .max(MAX_TEXT_LENGTH)
     .describe("Translated text to analyze"),
-  reference: z.string().max(10000).optional().describe("Optional reference translation"),
+  reference: z.string().max(MAX_TEXT_LENGTH).optional().describe("Optional reference translation"),
   min_severity: ErrorSeverity.default("minor").describe(
     "Minimum severity level to report (minor, major, critical)"
   ),
@@ -141,7 +148,7 @@ export const BatchEvaluateInputSchema = z.object({
   pairs: z
     .array(TranslationPairSchema)
     .min(1, "At least one translation pair is required")
-    .max(500, "Maximum 500 pairs per batch")
+    .max(MAX_BATCH_PAIRS, `Maximum ${MAX_BATCH_PAIRS} pairs per batch`)
     .describe("Array of translation pairs to evaluate"),
   source_lang: z.string().length(2).optional().describe("Source language code"),
   target_lang: z.string().length(2).optional().describe("Target language code"),
@@ -150,10 +157,10 @@ export const BatchEvaluateInputSchema = z.object({
   batch_size: z
     .number()
     .int()
-    .min(1)
-    .max(64)
-    .default(8)
-    .describe("Batch size for GPU processing (1-64). Larger = faster but uses more memory. Default: 8"),
+    .min(MIN_BATCH_SIZE)
+    .max(MAX_BATCH_SIZE)
+    .default(DEFAULT_BATCH_SIZE)
+    .describe(`Batch size for GPU processing (${MIN_BATCH_SIZE}-${MAX_BATCH_SIZE}). Larger = faster but uses more memory. Default: ${DEFAULT_BATCH_SIZE}`),
 });
 export type BatchEvaluateInput = z.infer<typeof BatchEvaluateInputSchema>;
 

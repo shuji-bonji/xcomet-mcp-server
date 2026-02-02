@@ -8,14 +8,27 @@ import { existsSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import {
+  PYTHON_MAX_RETRIES,
+  PYTHON_HEALTH_CHECK_INTERVAL_MS,
+  PYTHON_MAX_RESTARTS,
+  PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART,
+  PYTHON_RESTART_DELAY_MS,
+  PYTHON_SERVER_START_TIMEOUT_MS,
+  PYTHON_SERVER_READY_POLL_INTERVAL_MS,
+  PYTHON_SERVER_READY_MAX_ATTEMPTS,
+  PYTHON_HEALTH_CHECK_TIMEOUT_MS,
+  PYTHON_STATS_TIMEOUT_MS,
+  PYTHON_SHUTDOWN_TIMEOUT_MS,
+  PYTHON_KILL_TIMEOUT_MS,
+  PYTHON_DEPENDENCY_CHECK_TIMEOUT_MS,
+  XCOMET_DEFAULT_MODEL,
+  XCOMET_DEFAULT_TIMEOUT_MS,
+  HOMEBREW_PYTHON_PATHS,
+  REQUIRED_PYTHON_PACKAGES,
+} from "../config/constants.js";
+import { PythonServerErrors, LogMessages } from "../config/errors.js";
 
-// Constants
-const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_HEALTH_CHECK_INTERVAL = 30000;
-const DEFAULT_MAX_RESTARTS = 3;
-const HEALTH_CHECK_FAILURES_BEFORE_RESTART = 3;
-const RESTART_DELAY_MS = 2000;
-const SERVER_START_TIMEOUT = 30000;
 const DEBUG = process.env.XCOMET_DEBUG === "true";
 
 /**
@@ -68,6 +81,9 @@ function detectPythonPath(): string {
 
   const home = homedir();
 
+  // Build import check command from required packages
+  const importCheck = REQUIRED_PYTHON_PACKAGES.map(pkg => `import ${pkg}`).join("; ");
+
   // 2. Check pyenv versions
   const pyenvDir = join(home, ".pyenv", "versions");
   if (existsSync(pyenvDir)) {
@@ -89,8 +105,8 @@ function detectPythonPath(): string {
         if (existsSync(pythonPath)) {
           try {
             // Use execFileSync with args array to handle paths with spaces safely
-            execFileSync(pythonPath, ["-c", "import comet; import fastapi"], {
-              timeout: 5000,
+            execFileSync(pythonPath, ["-c", importCheck], {
+              timeout: PYTHON_DEPENDENCY_CHECK_TIMEOUT_MS,
               stdio: "ignore",
             });
             return pythonPath;
@@ -104,14 +120,13 @@ function detectPythonPath(): string {
     }
   }
 
-  // 3. Check Homebrew
-  const brewPaths = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"];
-  for (const path of brewPaths) {
+  // 3. Check Homebrew paths
+  for (const path of HOMEBREW_PYTHON_PATHS) {
     if (existsSync(path)) {
       try {
         // Use execFileSync with args array to handle paths with spaces safely
-        execFileSync(path, ["-c", "import comet; import fastapi"], {
-          timeout: 5000,
+        execFileSync(path, ["-c", importCheck], {
+          timeout: PYTHON_DEPENDENCY_CHECK_TIMEOUT_MS,
           stdio: "ignore",
         });
         return path;
@@ -146,10 +161,10 @@ export class PythonServerManager {
   constructor(config: PythonServerConfig = {}) {
     this.config = {
       pythonPath: config.pythonPath || detectPythonPath(),
-      model: config.model || process.env.XCOMET_MODEL || "Unbabel/XCOMET-XL",
-      maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
-      healthCheckInterval: config.healthCheckInterval ?? DEFAULT_HEALTH_CHECK_INTERVAL,
-      maxRestarts: config.maxRestarts ?? DEFAULT_MAX_RESTARTS,
+      model: config.model || process.env.XCOMET_MODEL || XCOMET_DEFAULT_MODEL,
+      maxRetries: config.maxRetries ?? PYTHON_MAX_RETRIES,
+      healthCheckInterval: config.healthCheckInterval ?? PYTHON_HEALTH_CHECK_INTERVAL_MS,
+      maxRestarts: config.maxRestarts ?? PYTHON_MAX_RESTARTS,
       preload: config.preload ?? (process.env.XCOMET_PRELOAD?.toLowerCase() === "true"),
     };
   }
@@ -171,7 +186,7 @@ export class PythonServerManager {
       }
     }
 
-    throw new Error("Python server script not found");
+    throw new Error(PythonServerErrors.scriptNotFound);
   }
 
   /**
@@ -204,7 +219,7 @@ export class PythonServerManager {
 
     const scriptPath = this.getServerScriptPath();
 
-    log(`[xcomet] Starting Python server with ${this.config.pythonPath}`);
+    log(LogMessages.starting(this.config.pythonPath));
     debugLog(`[xcomet] Model: ${this.config.model}`);
 
     const proc = spawn(this.config.pythonPath, [scriptPath], {
@@ -227,9 +242,9 @@ export class PythonServerManager {
     const portPromise = new Promise<number>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (!portReceived) {
-          reject(new Error("Timeout waiting for Python server to start"));
+          reject(new Error(PythonServerErrors.startupTimeout));
         }
-      }, SERVER_START_TIMEOUT);
+      }, PYTHON_SERVER_START_TIMEOUT_MS);
 
       proc.stdout?.on("data", (data: Buffer) => {
         stdoutBuffer += data.toString();
@@ -263,7 +278,7 @@ export class PythonServerManager {
       proc.on("exit", (code) => {
         if (!portReceived) {
           clearTimeout(timeout);
-          reject(new Error(`Python server exited with code ${code}`));
+          reject(new Error(PythonServerErrors.exitedWithCode(code)));
         }
       });
     });
@@ -279,21 +294,21 @@ export class PythonServerManager {
     try {
       const port = await portPromise;
       this.state.port = port;
-      log(`[xcomet] Python server reported port ${port}, waiting for server to be ready...`);
+      log(LogMessages.portReported(port));
 
       // Wait for server to actually be ready (uvicorn takes a moment to start listening)
       await this.waitForServerReady(port);
 
       this.state.ready = true;
       this.state.starting = false;
-      log(`[xcomet] Python server is ready on port ${port}`);
+      log(LogMessages.ready(port));
 
       // Start health check
       this.startHealthCheck();
 
       // Handle process exit
       proc.on("exit", (code) => {
-        log(`[xcomet] Python server exited with code ${code}`);
+        log(LogMessages.exited(code));
         this.state.ready = false;
         this.state.process = null;
         this.state.port = null;
@@ -321,13 +336,13 @@ export class PythonServerManager {
   /**
    * Wait for server to be ready by polling the health endpoint
    */
-  private async waitForServerReady(port: number, maxAttempts: number = 50): Promise<void> {
+  private async waitForServerReady(port: number, maxAttempts: number = PYTHON_SERVER_READY_MAX_ATTEMPTS): Promise<void> {
     const url = `http://127.0.0.1:${port}/health`;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 500);
+        const timeoutId = setTimeout(() => controller.abort(), PYTHON_HEALTH_CHECK_TIMEOUT_MS);
 
         const response = await fetch(url, {
           method: "GET",
@@ -344,11 +359,11 @@ export class PythonServerManager {
         // Server not ready yet, wait and retry
       }
 
-      // Wait 100ms before next attempt
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Wait before next attempt
+      await new Promise((resolve) => setTimeout(resolve, PYTHON_SERVER_READY_POLL_INTERVAL_MS));
     }
 
-    throw new Error(`Server failed to become ready after ${maxAttempts} attempts`);
+    throw new Error(PythonServerErrors.readyTimeout(maxAttempts));
   }
 
   /**
@@ -361,13 +376,13 @@ export class PythonServerManager {
       return;
     }
 
-    log("[xcomet] Stopping Python server...");
+    log(LogMessages.stopping);
 
     // Try graceful shutdown first - direct fetch to avoid start() being called
     if (this.state.port) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const timeoutId = setTimeout(() => controller.abort(), PYTHON_SHUTDOWN_TIMEOUT_MS);
         await fetch(`http://127.0.0.1:${this.state.port}/shutdown`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -390,7 +405,7 @@ export class PythonServerManager {
       const timeout = setTimeout(() => {
         proc.kill("SIGKILL");
         resolve();
-      }, 5000);
+      }, PYTHON_KILL_TIMEOUT_MS);
 
       proc.on("exit", () => {
         clearTimeout(timeout);
@@ -412,13 +427,13 @@ export class PythonServerManager {
     path: string,
     method: "GET" | "POST" = "GET",
     body?: unknown,
-    timeout: number = 300000
+    timeout: number = XCOMET_DEFAULT_TIMEOUT_MS
   ): Promise<T> {
     // Ensure server is started
     await this.start();
 
     if (!this.state.port) {
-      throw new Error("Python server not running");
+      throw new Error(PythonServerErrors.notRunning);
     }
 
     const url = `http://127.0.0.1:${this.state.port}${path}`;
@@ -447,7 +462,7 @@ export class PythonServerManager {
     } catch (error) {
       clearTimeout(timeoutId);
       if (error instanceof Error && error.name === "AbortError") {
-        throw new Error("Request timeout");
+        throw new Error(PythonServerErrors.requestTimeout);
       }
       throw error;
     }
@@ -457,7 +472,7 @@ export class PythonServerManager {
    * Health check
    */
   async healthCheck(): Promise<{ status: string; model_loaded: boolean; model_name: string }> {
-    return this.request("/health", "GET", undefined, 5000);
+    return this.request("/health", "GET", undefined, PYTHON_STATS_TIMEOUT_MS);
   }
 
   /**
@@ -475,10 +490,10 @@ export class PythonServerManager {
         this.state.consecutiveFailures = 0;
       } catch (error) {
         this.state.consecutiveFailures++;
-        log(`[xcomet] Health check failed (${this.state.consecutiveFailures}/${HEALTH_CHECK_FAILURES_BEFORE_RESTART}): ${error}`);
+        log(LogMessages.healthCheckFailed(this.state.consecutiveFailures, PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART, error));
 
         // Auto-restart after consecutive failures
-        if (this.state.consecutiveFailures >= HEALTH_CHECK_FAILURES_BEFORE_RESTART) {
+        if (this.state.consecutiveFailures >= PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART) {
           await this.attemptRestart();
         }
       }
@@ -494,13 +509,13 @@ export class PythonServerManager {
     }
 
     if (this.state.restartCount >= this.config.maxRestarts) {
-      log(`[xcomet] Max restarts (${this.config.maxRestarts}) reached, giving up`);
+      log(PythonServerErrors.maxRestartsReached(this.config.maxRestarts));
       return;
     }
 
     this.isRestarting = true;
     this.state.restartCount++;
-    log(`[xcomet] Attempting restart (${this.state.restartCount}/${this.config.maxRestarts})...`);
+    log(LogMessages.attemptingRestart(this.state.restartCount, this.config.maxRestarts));
 
     try {
       // Stop the current server
@@ -514,13 +529,13 @@ export class PythonServerManager {
       this.state.consecutiveFailures = 0;
 
       // Wait a bit before restarting
-      await new Promise((resolve) => setTimeout(resolve, RESTART_DELAY_MS));
+      await new Promise((resolve) => setTimeout(resolve, PYTHON_RESTART_DELAY_MS));
 
       // Start a new server
       await this._start();
-      log("[xcomet] Server restarted successfully");
+      log(LogMessages.restartSuccessful);
     } catch (error) {
-      log(`[xcomet] Restart failed: ${error}`);
+      log(LogMessages.restartFailed(error));
     } finally {
       this.isRestarting = false;
     }
@@ -578,7 +593,7 @@ export class PythonServerManager {
     total_inference_time_ms: number;
     avg_inference_time_ms: number | null;
   }> {
-    return this.request("/stats", "GET", undefined, 5000);
+    return this.request("/stats", "GET", undefined, PYTHON_STATS_TIMEOUT_MS);
   }
 
   /**

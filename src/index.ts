@@ -5,10 +5,14 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { registerTools } from "./tools/index.js";
 import { shutdownServer } from "./services/xcomet.js";
-
-// Server metadata
-const SERVER_NAME = "xcomet-mcp-server";
-const SERVER_VERSION = "0.3.2";
+import {
+  SERVER_NAME,
+  SERVER_VERSION,
+  DEFAULT_HTTP_PORT,
+  DEFAULT_BODY_LIMIT,
+  DEFAULT_TRANSPORT,
+} from "./config/constants.js";
+import { LogMessages } from "./config/errors.js";
 
 /**
  * Create and configure the MCP server
@@ -45,7 +49,7 @@ async function runHTTP(): Promise<void> {
   const server = createServer();
   const app = express();
 
-  const bodyLimit = process.env.MCP_BODY_LIMIT || "2mb";
+  const bodyLimit = process.env.MCP_BODY_LIMIT || DEFAULT_BODY_LIMIT;
   app.use(express.json({ limit: bodyLimit }));
 
   // Health check endpoint
@@ -84,7 +88,7 @@ async function runHTTP(): Promise<void> {
     res.status(500).json({ error: "Internal Server Error" });
   });
 
-  const port = parseInt(process.env.PORT || "3000", 10);
+  const port = parseInt(process.env.PORT || String(DEFAULT_HTTP_PORT), 10);
 
   app.listen(port, () => {
     console.error(`${SERVER_NAME} v${SERVER_VERSION} running on http://localhost:${port}/mcp`);
@@ -95,13 +99,13 @@ async function runHTTP(): Promise<void> {
  * Graceful shutdown handler
  */
 async function gracefulShutdown(signal: string): Promise<void> {
-  console.error(`[xcomet] Received ${signal}, shutting down...`);
+  console.error(LogMessages.shutdownSignal(signal));
   try {
     await shutdownServer();
-    console.error("[xcomet] Shutdown complete");
+    console.error(LogMessages.shutdownComplete);
     process.exit(0);
   } catch (error) {
-    console.error("[xcomet] Shutdown error:", error);
+    console.error(LogMessages.shutdownError(error));
     process.exit(1);
   }
 }
@@ -110,7 +114,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
  * Main entry point
  */
 async function main(): Promise<void> {
-  const transport = process.env.TRANSPORT || "stdio";
+  const transport = process.env.TRANSPORT || DEFAULT_TRANSPORT;
 
   // Register shutdown handlers
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

@@ -5,6 +5,18 @@
 
 import { getServerManager, shutdownServer, PythonServerManager } from "./python-server.js";
 import type { EvaluateOutput, DetectErrorsOutput, BatchEvaluateOutput } from "../schemas/index.js";
+import {
+  XCOMET_DEFAULT_MODEL,
+  XCOMET_DEFAULT_TIMEOUT_MS,
+  XCOMET_GPU_PER_PAIR_TIME_MS,
+  XCOMET_CPU_PER_PAIR_TIME_MS,
+  REFERENCE_REQUIRED_MODELS,
+} from "../config/constants.js";
+import {
+  XCometServiceErrors,
+  AvailabilityErrors,
+  InfoMessages,
+} from "../config/errors.js";
 
 /**
  * Configuration for xCOMET service
@@ -19,17 +31,8 @@ export interface XCometConfig {
  * Get model from environment variable or use default
  */
 function getModel(): string {
-  return process.env.XCOMET_MODEL || "Unbabel/XCOMET-XL";
+  return process.env.XCOMET_MODEL || XCOMET_DEFAULT_MODEL;
 }
-
-/**
- * Models that require a reference translation
- */
-const REFERENCE_REQUIRED_MODELS = [
-  "Unbabel/wmt22-comet-da",
-  "Unbabel/wmt20-comet-da",
-  "Unbabel/wmt21-comet-da",
-];
 
 /**
  * Check if the given model requires a reference translation
@@ -44,7 +47,7 @@ const DEFAULT_CONFIG: XCometConfig = {
   get model() {
     return getModel();
   },
-  timeout: 300000, // 5 minutes
+  timeout: XCOMET_DEFAULT_TIMEOUT_MS,
 };
 
 /**
@@ -72,8 +75,8 @@ export class XCometService {
       return {
         available: true,
         message: health.model_loaded
-          ? `xCOMET is available (model: ${health.model_name})`
-          : "xCOMET server is running, model will load on first request",
+          ? InfoMessages.available(health.model_name)
+          : InfoMessages.serverRunning,
         pythonPath: this.serverManager.getPythonPath(),
       };
     } catch (error) {
@@ -82,18 +85,11 @@ export class XCometService {
 
       let message: string;
       if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
-        message = `Python not found at "${pythonPath}". Please install Python 3.8+ and dependencies:\n` +
-          `  1. Install Python: https://www.python.org/downloads/\n` +
-          `  2. Install xCOMET: pip install 'unbabel-comet>=2.2.0'\n` +
-          `  3. Install server deps: pip install fastapi uvicorn\n` +
-          `  4. Set XCOMET_PYTHON_PATH if using pyenv/venv`;
+        message = AvailabilityErrors.pythonNotFound(pythonPath);
       } else if (errorMessage.includes("No module named")) {
-        message = `Missing Python dependencies. Run:\n` +
-          `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.0' fastapi uvicorn`;
+        message = AvailabilityErrors.missingDependencies(pythonPath);
       } else {
-        message = `Python server failed: ${errorMessage}\n` +
-          `Python path: ${pythonPath}\n` +
-          `Tip: Set XCOMET_PYTHON_PATH to specify Python with dependencies installed`;
+        message = AvailabilityErrors.serverFailed(errorMessage, pythonPath);
       }
 
       return {
@@ -129,10 +125,7 @@ export class XCometService {
   ): Promise<EvaluateOutput> {
     // Validate reference requirement
     if (!reference && modelRequiresReference(this.config.model)) {
-      throw new Error(
-        `Model "${this.config.model}" requires a reference translation. ` +
-        `Please provide the 'reference' parameter, or use an XCOMET model (e.g., Unbabel/XCOMET-XL) for referenceless evaluation.`
-      );
+      throw new Error(XCometServiceErrors.referenceRequired(this.config.model));
     }
 
     const result = await this.serverManager.request<EvaluateOutput>("/evaluate", "POST", {
@@ -188,15 +181,13 @@ export class XCometService {
       const missingRefCount = pairs.filter((p) => !p.reference).length;
       if (missingRefCount > 0) {
         throw new Error(
-          `Model "${this.config.model}" requires reference translations. ` +
-          `${missingRefCount} of ${pairs.length} pairs are missing 'reference'. ` +
-          `Please provide references for all pairs, or use an XCOMET model (e.g., Unbabel/XCOMET-XL) for referenceless evaluation.`
+          XCometServiceErrors.batchReferenceRequired(this.config.model, missingRefCount, pairs.length)
         );
       }
     }
 
     // Calculate timeout based on batch size
-    const perPairTime = useGpu ? 1000 : 5000;
+    const perPairTime = useGpu ? XCOMET_GPU_PER_PAIR_TIME_MS : XCOMET_CPU_PER_PAIR_TIME_MS;
     const timeout = this.config.timeout + pairs.length * perPairTime;
 
     const result = await this.serverManager.request<BatchEvaluateOutput>("/batch_evaluate", "POST", {
