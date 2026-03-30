@@ -542,3 +542,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [xCOMET Paper](https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00683/124263/xcomet-Transparent-Machine-Translation-Evaluation)
 - [COMET Framework](https://github.com/Unbabel/COMET)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
+
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/shuji-bonji-xcomet-mcp-server).
+
