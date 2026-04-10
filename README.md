@@ -325,11 +325,13 @@ Then ask Claude:
 
 Choose the model based on your quality/performance needs:
 
-| Model | Parameters | Size | Memory | Reference | Quality | Use Case |
-|-------|------------|------|--------|-----------|---------|----------|
-| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | ~8-10GB | Optional | ⭐⭐⭐⭐ | Recommended for most use cases |
-| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | ~20GB | Optional | ⭐⭐⭐⭐⭐ | Highest quality, requires more resources |
-| `Unbabel/wmt22-comet-da` | 580M | ~2GB | ~3GB | **Required** | ⭐⭐⭐ | Lightweight, faster loading |
+| Model | Parameters | Size | Memory | Reference | HF Auth | Quality | Use Case |
+|-------|------------|------|--------|-----------|---------|---------|----------|
+| `Unbabel/XCOMET-XL` | 3.5B | ~14GB | ~8-10GB | Optional | ✅ Required | ⭐⭐⭐⭐ | Recommended for most use cases |
+| `Unbabel/XCOMET-XXL` | 10.7B | ~42GB | ~20GB | Optional | ✅ Required | ⭐⭐⭐⭐⭐ | Highest quality, requires more resources |
+| `Unbabel/wmt22-comet-da` | 580M | ~2GB | ~3GB | **Required** | Not required | ⭐⭐⭐ | Lightweight, faster loading |
+
+> **Important**: XCOMET-XL and XCOMET-XXL are gated models on HuggingFace. Each model requires **separate** access approval. See [Model Download](#model-download) for authentication setup.
 
 > **Important**: `wmt22-comet-da` requires a `reference` translation for evaluation. XCOMET models support referenceless evaluation.
 
