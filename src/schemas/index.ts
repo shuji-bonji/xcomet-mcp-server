@@ -177,6 +177,16 @@ export const BatchEvaluateOutputSchema = z.object({
         score: z.number().min(0).max(1),
         error_count: z.number(),
         has_critical_errors: z.boolean(),
+        errors: z
+          .array(
+            z.object({
+              text: z.string().describe("Error span text"),
+              start: z.number().describe("Start position in translation"),
+              end: z.number().describe("End position in translation"),
+              severity: ErrorSeverity.describe("Error severity level"),
+            })
+          )
+          .describe("Detected error spans for this pair"),
       })
     )
     .describe("Individual results for each pair"),
