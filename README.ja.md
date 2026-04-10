@@ -36,18 +36,41 @@ graph LR
 
 ### Python 環境
 
-xCOMET には以下のパッケージがインストールされた Python が必要です：
+- Python 3.9 - 3.12 推奨（3.13 以降は xCOMET の依存パッケージが未対応）
+
+xCOMET には複数の Python パッケージが必要です。仮想環境（venv）の利用を推奨します：
 
 ```bash
-pip install "unbabel-comet>=2.2.0" fastapi uvicorn
+# uv を使う場合（推奨 — 適切な Python バージョンを自動ダウンロード）
+uv venv ~/.xcomet-venv --python 3.12
+source ~/.xcomet-venv/bin/activate
+uv pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+
+# 標準の venv を使う場合（Python 3.9-3.12 が既にインストールされている必要あり）
+python3 -m venv ~/.xcomet-venv
+source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
+pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
 ```
+
+> **注意**: Claude Desktop 等の MCP ホストから利用する場合は、`XCOMET_PYTHON_PATH` に venv の Python パスを指定してください（[設定](#設定)を参照）。
 
 ### モデルのダウンロード
 
-初回実行時に xCOMET モデルがダウンロードされます（XL は約 14GB、XXL は約 42GB）：
+> **重要**: XCOMET-XL と XCOMET-XXL は HuggingFace の**ゲート付きモデル**です。以下の手順が必要です：
+> 1. [HuggingFace](https://huggingface.co/) アカウントを作成
+> 2. [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) にアクセスし、利用をリクエスト
+> 3. CLI でログイン：
+>    ```bash
+>    source ~/.xcomet-venv/bin/activate
+>    huggingface-cli login
+>    ```
+>
+> `Unbabel/wmt22-comet-da` は認証**不要**です（ただし参照訳が必須）。
+
+認証後、モデルをダウンロードします（XL は約 14GB、XXL は約 42GB）：
 
 ```bash
-# モデルの利用可能性をテスト
+source ~/.xcomet-venv/bin/activate
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
 
@@ -58,15 +81,24 @@ python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')
 
 ## インストール
 
+> **注意**: xCOMET MCP Server を**利用するだけ**であれば、このリポジトリのクローンは**不要**です。Python 環境とモデルのセットアップ（[前提条件](#前提条件)を参照）を行い、`npx` で利用してください（[使い方](#使い方)を参照）。以下のセクションはコントリビューターやローカル開発向けです。
+
+### ローカル開発
+
+コントリビューターやローカル開発向け：
+
 ```bash
 # リポジトリをクローン
 git clone https://github.com/shuji-bonji/xcomet-mcp-server.git
 cd xcomet-mcp-server
 
-# 依存関係をインストール
-npm install
+# Python 仮想環境のセットアップと依存関係のインストール
+uv venv .venv --python 3.12    # または: python3 -m venv .venv
+source .venv/bin/activate
+pip install -r python/requirements.txt
 
-# ビルド
+# Node.js 依存関係のインストールとビルド
+npm install
 npm run build
 ```
 
@@ -81,21 +113,26 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に追加�
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"]
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
 ```
 
+> **ヒント**: Python パッケージをシステム全体にインストールしている場合や pyenv を使用している場合は、`XCOMET_PYTHON_PATH` を省略できます（自動検出されます）。詳細は [Python パスの自動検出](#python-パスの自動検出) を参照してください。
+
 ### Claude Code での利用
 
 ```bash
-claude mcp add xcomet -- npx -y xcomet-mcp-server
+claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server
 ```
 
-### ローカルインストール
+### グローバルインストール
 
-ローカルにインストールする場合：
+グローバルにインストールする場合：
 
 ```bash
 npm install -g xcomet-mcp-server
@@ -106,7 +143,28 @@ npm install -g xcomet-mcp-server
 {
   "mcpServers": {
     "xcomet": {
-      "command": "xcomet-mcp-server"
+      "command": "xcomet-mcp-server",
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
+    }
+  }
+}
+```
+
+### ローカル開発ビルド
+
+リポジトリをクローンしてビルドした場合（[インストール（ローカル開発）](#インストールローカル開発)を参照）：
+
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "node",
+      "args": ["/path/to/xcomet-mcp-server/dist/index.js"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
@@ -238,7 +296,10 @@ Claude Desktop で両サーバーを設定：
     },
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"]
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
@@ -349,6 +410,18 @@ Claude への指示例：
 
 プリロードを有効にすると、初回リクエストを含む**すべてのリクエストが高速**（約 500ms）になります。
 
+```mermaid
+graph LR
+    A[MCP リクエスト] --> B[Node.js サーバー]
+    B --> C[Python FastAPI サーバー]
+    C --> D[xCOMET モデル<br/>メモリ常駐]
+    D --> C
+    C --> B
+    B --> A
+
+    style D fill:#9f9
+```
+
 ### バッチ処理の最適化
 
 `xcomet_batch_evaluate` ツールは、単一のモデルロードですべてのペアを処理します：
@@ -423,19 +496,23 @@ v0.3.0+ では、モデルはメモリに常駐します。複数の `xcomet_eva
 # 使用されている Python を確認
 python3 -c "import sys; print(sys.executable)"
 
-# 必要なパッケージをすべてインストール
-pip install "unbabel-comet>=2.2.0" fastapi uvicorn
+# 仮想環境を使用している場合は、有効化されているか確認
+source .venv/bin/activate
+pip install -r python/requirements.txt
 
-# または Python パスを明示的に指定
-export XCOMET_PYTHON_PATH=/path/to/python3
+# MCP ホスト（例: Claude Desktop）では venv の Python パスを指定
+export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 ```
 
 #### モデルのダウンロードが失敗またはタイムアウト
 
-**原因**: 大きなモデルファイル（XL は約 14GB）には安定したインターネット接続が必要
+**原因**: 大きなモデルファイル（XL は約 14GB）には安定したインターネット接続が必要。XCOMET モデルは HuggingFace 認証も必要です（[モデルのダウンロード](#モデルのダウンロード)を参照）。
 
 **解決策**:
 ```bash
+# HuggingFace にログイン（XCOMET-XL/XXL に必要）
+huggingface-cli login
+
 # モデルを手動で事前ダウンロード
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
@@ -489,7 +566,7 @@ vm_stat | head -5  # macOS
 問題が発生した場合：
 
 1. [GitHub Issues](https://github.com/shuji-bonji/xcomet-mcp-server/issues) を確認
-2. Claude Desktop の開発者モードログで詳細ログを確認
+2. デバッグログを有効にして確認（Claude Desktop の開発者モードログ、または `XCOMET_DEBUG=true` を設定）
 3. 以下の情報を含めて新しい Issue を作成：
    - OS と Python バージョン
    - エラーメッセージ

@@ -36,18 +36,41 @@ graph LR
 
 ### Python Environment
 
-xCOMET requires Python with the following packages:
+- Python 3.9 - 3.12 recommended (3.13+ is not yet supported by xCOMET dependencies)
+
+xCOMET requires Python with several packages. We recommend using a virtual environment:
 
 ```bash
-pip install "unbabel-comet>=2.2.0" fastapi uvicorn
+# If using uv (recommended - auto-downloads the correct Python version)
+uv venv ~/.xcomet-venv --python 3.12
+source ~/.xcomet-venv/bin/activate
+uv pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+
+# Or using standard venv (requires Python 3.9-3.12 already installed)
+python3 -m venv ~/.xcomet-venv
+source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
+pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
 ```
+
+> **Note**: When using with Claude Desktop or other MCP hosts, set `XCOMET_PYTHON_PATH` to point to the venv Python (see [Configuration](#-configuration)).
 
 ### Model Download
 
-The first run will download the xCOMET model (~14GB for XL, ~42GB for XXL):
+> **Important**: XCOMET-XL and XCOMET-XXL are **gated models** on HuggingFace. You must:
+> 1. Create a [HuggingFace](https://huggingface.co/) account
+> 2. Visit [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) and request access
+> 3. Login via CLI:
+>    ```bash
+>    source ~/.xcomet-venv/bin/activate
+>    huggingface-cli login
+>    ```
+>
+> `Unbabel/wmt22-comet-da` does **not** require authentication (but requires reference translations).
+
+After authentication, download the model (~14GB for XL, ~42GB for XXL):
 
 ```bash
-# Test model availability
+source ~/.xcomet-venv/bin/activate
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
 
@@ -58,15 +81,24 @@ python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')
 
 ## 📦 Installation
 
+> **Note**: If you just want to **use** xCOMET MCP Server, you do **not** need to clone this repository. Install the Python environment and model (see [Prerequisites](#-prerequisites)), then use `npx` (see [Usage](#-usage)). The section below is for contributors and local development only.
+
+### Local Development
+
+For contributors and local development:
+
 ```bash
 # Clone the repository
 git clone https://github.com/shuji-bonji/xcomet-mcp-server.git
 cd xcomet-mcp-server
 
-# Install dependencies
-npm install
+# Set up Python virtual environment and install dependencies
+uv venv .venv --python 3.12    # or: python3 -m venv .venv
+source .venv/bin/activate
+pip install -r python/requirements.txt
 
-# Build
+# Install Node.js dependencies and build
+npm install
 npm run build
 ```
 
@@ -81,21 +113,26 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"]
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
 ```
 
+> **Tip**: If you installed Python packages system-wide or use pyenv, `XCOMET_PYTHON_PATH` may be omitted (auto-detection will find it). See [Python Path Auto-Detection](#python-path-auto-detection) for details.
+
 ### With Claude Code
 
 ```bash
-claude mcp add xcomet -- npx -y xcomet-mcp-server
+claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server
 ```
 
-### Local Installation
+### Global Installation
 
-If you prefer a local installation:
+If you prefer installing globally:
 
 ```bash
 npm install -g xcomet-mcp-server
@@ -106,7 +143,28 @@ Then configure:
 {
   "mcpServers": {
     "xcomet": {
-      "command": "xcomet-mcp-server"
+      "command": "xcomet-mcp-server",
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
+    }
+  }
+}
+```
+
+### Local Development Build
+
+If you cloned and built the repository locally (see [Installation](#-installation-local-development)):
+
+```json
+{
+  "mcpServers": {
+    "xcomet": {
+      "command": "node",
+      "args": ["/path/to/xcomet-mcp-server/dist/index.js"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
@@ -238,7 +296,10 @@ Configure both servers in Claude Desktop:
     },
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"]
+      "args": ["-y", "xcomet-mcp-server"],
+      "env": {
+        "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
+      }
     }
   }
 }
@@ -435,19 +496,23 @@ The server automatically recovers from failures:
 # Check which Python is being used
 python3 -c "import sys; print(sys.executable)"
 
-# Install all required packages
-pip install "unbabel-comet>=2.2.0" fastapi uvicorn
+# If using a virtual environment, make sure it's activated
+source .venv/bin/activate
+pip install -r python/requirements.txt
 
-# Or specify Python path explicitly
-export XCOMET_PYTHON_PATH=/path/to/python3
+# For MCP hosts (e.g., Claude Desktop), specify the venv Python path
+export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 ```
 
 #### Model download fails or times out
 
-**Cause**: Large model files (~14GB for XL) require stable internet connection.
+**Cause**: Large model files (~14GB for XL) require stable internet connection. XCOMET models also require HuggingFace authentication (see [Model Download](#model-download)).
 
 **Solution**:
 ```bash
+# Login to HuggingFace (required for XCOMET-XL/XXL)
+huggingface-cli login
+
 # Pre-download the model manually
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
@@ -501,7 +566,7 @@ vm_stat | head -5  # macOS
 If you encounter issues:
 
 1. Check the [GitHub Issues](https://github.com/shuji-bonji/xcomet-mcp-server/issues)
-2. Enable debug logging by checking Claude Desktop's Developer Mode logs
+2. Enable debug logging (check Claude Desktop's Developer Mode logs, or set `XCOMET_DEBUG=true`)
 3. Open a new issue with:
    - Your OS and Python version
    - The error message
@@ -518,6 +583,9 @@ npm run build
 
 # Watch mode
 npm run dev
+
+# Run tests
+npm test
 
 # Test with MCP Inspector
 npm run inspect

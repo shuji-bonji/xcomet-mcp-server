@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-04-10
+
+### Fixed
+
+- **Tilde expansion in `XCOMET_PYTHON_PATH`**: Paths like `~/.xcomet-venv/bin/python3` are now correctly expanded to the home directory. Previously, `~` was not resolved by Node.js `existsSync`, causing the environment variable to be silently ignored.
+
+### Changed
+
+- **Documentation overhaul** (README.md / README.ja.md):
+  - Added Python version requirement (3.9-3.12 recommended, 3.13+ not yet supported)
+  - Added HuggingFace gated model authentication instructions for XCOMET-XL/XXL
+  - Clarified that repository cloning is not needed for npx users
+  - Added `uv` as recommended tool for virtual environment setup
+  - Added `XCOMET_PYTHON_PATH` to all configuration examples
+  - Separated usage sections: npx / Claude Code / Global Install / Local Development Build
+  - Added `npm test` to Development section (was missing in English README)
+  - Added Mermaid diagram to Performance section (was missing in Japanese README)
+  - Unified troubleshooting guidance across both languages
+  - Fixed DeepL integration example missing `XCOMET_PYTHON_PATH`
+
 ## [0.3.6] - 2026-02-03
 
 ### Added

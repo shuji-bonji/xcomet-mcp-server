@@ -72,11 +72,21 @@ interface ServerState {
 /**
  * Detect Python path with required dependencies
  */
+function expandHome(filepath: string): string {
+  if (filepath.startsWith("~/") || filepath === "~") {
+    return join(homedir(), filepath.slice(1));
+  }
+  return filepath;
+}
+
 function detectPythonPath(): string {
   // 1. Check environment variable
   const envPath = process.env.XCOMET_PYTHON_PATH;
-  if (envPath && existsSync(envPath)) {
-    return envPath;
+  if (envPath) {
+    const expanded = expandHome(envPath);
+    if (existsSync(expanded)) {
+      return expanded;
+    }
   }
 
   const home = homedir();
