@@ -3,7 +3,8 @@
  * Uses a persistent Python server for fast inference.
  */
 
-import { getServerManager, shutdownServer, PythonServerManager } from "./python-server.js";
+import type { PythonServerManager } from "./python-server.js";
+import { getServerManager, shutdownServer } from "./python-server.js";
 import type { EvaluateOutput, DetectErrorsOutput, BatchEvaluateOutput } from "../schemas/index.js";
 import {
   XCOMET_DEFAULT_MODEL,

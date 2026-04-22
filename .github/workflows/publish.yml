@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,7 +14,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
@@ -32,7 +50,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
@@ -44,13 +62,16 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: read
+      id-token: write  # Required for npm Trusted Publisher (OIDC)
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
 
@@ -70,7 +91,10 @@ jobs:
           fi
           echo "Version verified: $PACKAGE_VERSION"
 
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted Publisher requires npm >= 11.5.1, but Node 22 ships with npm 10.x.
+      # `npm install -g npm@latest` is known to fail intermittently on GitHub Actions
+      # runners (self-overwrite race -> MODULE_NOT_FOUND), so we invoke a fresh npm
+      # via npx only for this step. No NODE_AUTH_TOKEN needed: authentication is
+      # performed via OIDC token exchange with npm Trusted Publisher.
+      - name: Publish to npm (Trusted Publisher with provenance)
+        run: npx -y npm@latest publish --provenance --access public

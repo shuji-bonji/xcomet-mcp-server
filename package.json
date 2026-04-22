@@ -1,17 +1,21 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "inspect": "npx @modelcontextprotocol/inspector",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
     "mcp",
@@ -23,6 +27,10 @@
   ],
   "author": "shuji-bonji",
   "license": "MIT",
+  "homepage": "https://github.com/shuji-bonji/xcomet-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/shuji-bonji/xcomet-mcp-server/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/shuji-bonji/xcomet-mcp-server.git"
@@ -33,13 +41,16 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
+    "eslint": "^9.39.4",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.59.0",
     "vitest": "^4.0.16"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "bin": {
     "xcomet-mcp-server": "./dist/index.js"
@@ -48,8 +59,10 @@
     "dist",
     "python",
     "README.md",
+    "README.ja.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "glama.json"
   ],
   "publishConfig": {
     "access": "public"

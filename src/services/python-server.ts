@@ -3,7 +3,8 @@
  * Manages a persistent Python FastAPI server for xCOMET inference.
  */
 
-import { spawn, ChildProcess, execFileSync } from "child_process";
+import type { ChildProcess} from "child_process";
+import { spawn, execFileSync } from "child_process";
 import { existsSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";

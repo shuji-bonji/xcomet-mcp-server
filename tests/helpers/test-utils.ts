@@ -5,7 +5,8 @@
  * across test files.
  */
 
-import { spawn, ChildProcess, execSync } from "child_process";
+import type { ChildProcess} from "child_process";
+import { spawn, execSync } from "child_process";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -263,6 +264,8 @@ export const toBeOneOfMatcher = {
  * Type augmentation for Vitest to support toBeOneOf matcher
  */
 declare module "vitest" {
+  // Generic parameter T must match Vitest's signature even when unused
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface Assertion<T> {
     toBeOneOf(expected: unknown[]): void;
   }

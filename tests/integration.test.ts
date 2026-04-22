@@ -5,7 +5,7 @@
  * They require Python with fastapi and uvicorn installed.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { ChildProcess } from "child_process";
+import type { ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import {
   checkPythonDeps,

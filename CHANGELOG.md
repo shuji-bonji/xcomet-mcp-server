@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-23
+
+### Changed
+
+- **npm publish migrated to Trusted Publisher (OIDC + provenance)**:
+  - `publish.yml` now uses npm's Trusted Publisher with OpenID Connect (no long-lived `NPM_TOKEN` required)
+  - Published packages now include provenance statements (`--provenance`)
+  - `permissions.id-token: write` added to the publish job
+  - Publish step uses `npx -y npm@latest publish` because Trusted Publisher requires npm >= 11.5.1 while Node 22 ships with npm 10.x, and `npm install -g npm@latest` has a known self-overwrite race on GitHub Actions runners
+- **Node.js support bumped to `>=22`** (Node 20 reached end-of-life in April 2026)
+  - CI matrix updated to `[22, 24]` (both are current npm LTS lines)
+  - `publish.yml` builds and publishes on Node 22 (the minimum supported version)
+- **`package.json` metadata polish**:
+  - Added `homepage` and `bugs` fields
+  - Added `glama.json` and `README.ja.md` to the `files` array
+  - Added `clean`, `typecheck`, `lint`, `lint:fix` scripts
+  - `prepublishOnly` now runs `clean && build` for a deterministic dist/
+
+### Added
+
+- **ESLint (flat config)** with `typescript-eslint` and a rule set tuned for MCP stdio safety (`no-console` restricted to `error`/`warn`)
+- **Lint step in CI** (`lint` job in `ci.yml`, and as a gate in `publish.yml`)
+
 ## [0.3.9] - 2026-04-10
 
 ### Fixed
