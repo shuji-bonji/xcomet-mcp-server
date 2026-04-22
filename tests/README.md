@@ -368,12 +368,14 @@ npx vitest run --coverage
 
 - Python 3.8 以上
 - 以下のパッケージがインストール済み:
-  - `fastapi`
-  - `uvicorn`
+  - `unbabel-comet`
 
 ```bash
-pip install fastapi uvicorn
+pip install "unbabel-comet>=2.2.0"
 ```
+
+> **Note (v0.5.0+)**: Python ワーカーは stdio JSON-RPC で通信するため、
+> FastAPI/uvicorn は不要です。
 
 ---
 
@@ -412,7 +414,7 @@ GitHub Actions などで実行する場合の例:
 - name: Run tests
   run: |
     npm ci
-    pip install fastapi uvicorn
+    pip install "unbabel-comet>=2.2.0"
     npm test
 ```
 
@@ -426,12 +428,8 @@ Python の依存関係がインストールされていない場合、統合テ�
 
 ```bash
 # 依存関係をインストール
-pip install fastapi uvicorn
+pip install "unbabel-comet>=2.2.0"
 ```
-
-### ポートが既に使用中のエラー
-
-テストは毎回ランダムなポートを使用しますが、まれにポート競合が発生する場合があります。テストを再実行してください。
 
 ### タイムアウトエラー
 

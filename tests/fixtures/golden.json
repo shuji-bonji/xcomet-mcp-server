@@ -1,0 +1,233 @@
+{
+  "$schema": "./golden.schema.json",
+  "version": "1.0",
+  "model": "Unbabel/XCOMET-XL",
+  "description": "Reference fixtures for xCOMET evaluation quality regression testing. Each case asserts the score falls within a range, not an exact value, because xCOMET output is not bitwise deterministic across hardware/library versions.",
+  "range_conventions": {
+    "good": { "min": 0.80, "max": 1.01 },
+    "fair": { "min": 0.50, "max": 0.95 },
+    "poor": { "min": 0.00, "max": 0.75 }
+  },
+  "cases": [
+    {
+      "id": "good-ja-en-001",
+      "quality": "good",
+      "description": "Simple accurate ja→en",
+      "source": "こんにちは、世界。",
+      "translation": "Hello, world.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.80,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-en-ja-001",
+      "quality": "good",
+      "description": "Simple accurate en→ja",
+      "source": "The meeting starts at 10 AM.",
+      "translation": "会議は午前10時に始まります。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.80,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-ja-en-async",
+      "quality": "good",
+      "description": "Technical term — asynchronous processing",
+      "source": "非同期処理",
+      "translation": "asynchronous processing",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.85,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-ja-en-auth",
+      "quality": "good",
+      "description": "UI message — auth completion",
+      "source": "ユーザー認証が完了しました。",
+      "translation": "User authentication has been completed.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.80,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-en-ja-date",
+      "quality": "good",
+      "description": "Date preserved correctly",
+      "source": "The deadline is April 30, 2026.",
+      "translation": "締め切りは2026年4月30日です。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.80,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-ja-en-paragraph",
+      "quality": "good",
+      "description": "Multi-sentence paragraph",
+      "source": "この機能は試験運用中です。予告なく変更される可能性があります。フィードバックを歓迎します。",
+      "translation": "This feature is in experimental trial. It may change without notice. Feedback is welcome.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.75,
+      "score_max": 1.01
+    },
+    {
+      "id": "good-en-ja-short",
+      "quality": "good",
+      "description": "Single-word terminology",
+      "source": "Download",
+      "translation": "ダウンロード",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.70,
+      "score_max": 1.01
+    },
+    {
+      "id": "fair-ja-en-stiff",
+      "quality": "fair",
+      "description": "Stiff but accurate translation",
+      "source": "弊社は本件につきまして真摯に対応いたします。",
+      "translation": "Our company will sincerely respond to this matter.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.55,
+      "score_max": 0.95
+    },
+    {
+      "id": "fair-en-ja-awkward",
+      "quality": "fair",
+      "description": "Literal but awkward word order",
+      "source": "Please click the button below to continue.",
+      "translation": "下のボタンをクリックしてください続けるために。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.45,
+      "score_max": 0.90
+    },
+    {
+      "id": "fair-ja-en-unsubscribe",
+      "quality": "fair",
+      "description": "Correct verb but slightly unnatural phrasing",
+      "source": "購読を解除する",
+      "translation": "cancel the subscription following",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.30,
+      "score_max": 0.85
+    },
+    {
+      "id": "fair-ja-en-missing-detail",
+      "quality": "fair",
+      "description": "Summary drops a minor qualifier",
+      "source": "RxJSは強力で柔軟なリアクティブプログラミングライブラリです。",
+      "translation": "RxJS is a reactive programming library.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.45,
+      "score_max": 0.90
+    },
+    {
+      "id": "fair-en-ja-register-mismatch",
+      "quality": "fair",
+      "description": "Formal en → casual ja",
+      "source": "We sincerely apologize for the inconvenience.",
+      "translation": "ごめんね、迷惑かけて。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.30,
+      "score_max": 0.85
+    },
+    {
+      "id": "poor-ja-en-opposite",
+      "quality": "poor",
+      "description": "Async → synchronous (meaning inverted)",
+      "source": "非同期処理",
+      "translation": "synchronous processing",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.00,
+      "score_max": 0.90
+    },
+    {
+      "id": "poor-en-ja-wrong-number",
+      "quality": "poor",
+      "description": "10 AM → 10 PM (time inverted)",
+      "source": "The meeting starts at 10 AM.",
+      "translation": "会議は午後10時に始まります。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.00,
+      "score_max": 0.90
+    },
+    {
+      "id": "poor-ja-en-hallucination",
+      "quality": "poor",
+      "description": "Added content absent from source",
+      "source": "明日は晴れです。",
+      "translation": "It will be sunny tomorrow with a 90% chance of afternoon thunderstorms and high humidity.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.00,
+      "score_max": 0.80
+    },
+    {
+      "id": "poor-ja-en-omission",
+      "quality": "poor",
+      "description": "Core condition omitted from translation",
+      "source": "21歳未満の方のご利用はお断りします。",
+      "translation": "Please use our service.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.00,
+      "score_max": 0.70
+    },
+    {
+      "id": "poor-en-ja-wrong-entity",
+      "quality": "poor",
+      "description": "Subject entity replaced",
+      "source": "Einstein developed the theory of relativity.",
+      "translation": "ニュートンは相対性理論を発展させた。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.00,
+      "score_max": 0.85
+    },
+    {
+      "id": "edge-ja-en-emoji",
+      "quality": "good",
+      "description": "Emoji and hashtag preserved",
+      "source": "新機能をリリースしました 🚀 #announcement",
+      "translation": "We just released a new feature 🚀 #announcement",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.70,
+      "score_max": 1.01
+    },
+    {
+      "id": "edge-ja-en-code",
+      "quality": "good",
+      "description": "Inline code identifier preserved verbatim",
+      "source": "`map()` メソッドは新しい配列を返します。",
+      "translation": "The `map()` method returns a new array.",
+      "source_lang": "ja",
+      "target_lang": "en",
+      "score_min": 0.75,
+      "score_max": 1.01
+    },
+    {
+      "id": "edge-en-ja-whitespace",
+      "quality": "good",
+      "description": "Multi-line with preserved newlines",
+      "source": "Line one.\nLine two.\nLine three.",
+      "translation": "1行目。\n2行目。\n3行目。",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "score_min": 0.70,
+      "score_max": 1.01
+    }
+  ]
+}

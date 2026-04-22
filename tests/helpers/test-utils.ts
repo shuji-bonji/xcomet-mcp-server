@@ -2,10 +2,11 @@
  * Shared test utilities for xCOMET MCP Server tests
  *
  * This module provides common helpers to reduce code duplication
- * across test files.
+ * across test files. All helpers speak the stdio JSON-RPC protocol
+ * (one JSON object per line) used by python/server.py.
  */
 
-import type { ChildProcess} from "child_process";
+import type { ChildProcess } from "child_process";
 import { spawn, execSync } from "child_process";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -19,33 +20,126 @@ export const SERVER_SCRIPT_PATH = join(__dirname, "..", "..", "python", "server.
 /** Default timeout for server startup in milliseconds */
 export const SERVER_STARTUP_TIMEOUT_MS = 15000;
 
-/** Default timeout for server ready check in milliseconds */
-export const SERVER_READY_TIMEOUT_MS = 500;
-
-/** Default interval for server ready polling in milliseconds */
-export const SERVER_READY_POLL_INTERVAL_MS = 100;
-
-/** Default max attempts for server ready check */
-export const SERVER_READY_MAX_ATTEMPTS = 50;
-
 /** Timeout for process cleanup in milliseconds */
 export const PROCESS_CLEANUP_TIMEOUT_MS = 3000;
 
+/** Default timeout for individual RPC requests in milliseconds */
+export const RPC_REQUEST_TIMEOUT_MS = 120000;
+
 /**
  * Server instance returned by startServer helper
+ *
+ * `client.request(method, params)` sends a single RPC and returns the response.
  */
 export interface ServerInstance {
   process: ChildProcess;
-  port: number;
+  client: StdioRpcClient;
 }
 
 /**
- * Check if Python dependencies (fastapi, uvicorn) are available
- * @returns true if dependencies are installed, false otherwise
+ * Minimal stdio JSON-RPC client, matching the protocol spoken by python/server.py:
+ *   Request:  {"id": <number>, "method": <str>, "params": <obj>}
+ *   Response: {"id": <number>, "result": <obj>}  OR  {"id": <number>, "error": <str>}
+ */
+export class StdioRpcClient {
+  private nextId = 1;
+  private buffer = "";
+  private pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (reason: Error) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
+
+  constructor(private readonly process: ChildProcess, initialBuffer: string = "") {
+    this.buffer = initialBuffer;
+    process.stdout?.on("data", (chunk: Buffer) => this.onData(chunk));
+    process.on("exit", (code, signal) => {
+      const err = new Error(
+        `Python server exited (code=${code}, signal=${signal ?? "none"})`
+      );
+      for (const [, p] of this.pending) {
+        clearTimeout(p.timer);
+        p.reject(err);
+      }
+      this.pending.clear();
+    });
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer += chunk.toString();
+    const lines = this.buffer.split("\n");
+    this.buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      let msg: { id?: number; result?: unknown; error?: string };
+      try {
+        msg = JSON.parse(trimmed);
+      } catch {
+        // Ignore non-JSON lines (shouldn't happen on stdout, but be defensive)
+        continue;
+      }
+
+      if (typeof msg.id !== "number") continue; // "ready" etc. are handled elsewhere
+      const p = this.pending.get(msg.id);
+      if (!p) continue;
+      clearTimeout(p.timer);
+      this.pending.delete(msg.id);
+      if (msg.error !== undefined) {
+        p.reject(new Error(msg.error));
+      } else {
+        p.resolve(msg.result);
+      }
+    }
+  }
+
+  /**
+   * Send an RPC request and await its correlated response.
+   */
+  async request<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeout: number = RPC_REQUEST_TIMEOUT_MS
+  ): Promise<T> {
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`Request timeout: ${method}#${id}`));
+        }
+      }, timeout);
+
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+      });
+
+      const payload = JSON.stringify({ id, method, params }) + "\n";
+      try {
+        this.process.stdin?.write(payload);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+}
+
+/**
+ * Check if the Python `comet` package is importable.
+ *
+ * (We no longer need fastapi/uvicorn — stdio only needs `unbabel-comet`.)
  */
 export function checkPythonDeps(): boolean {
   try {
-    execSync('python3 -c "import fastapi; import uvicorn"', {
+    execSync('python3 -c "import comet"', {
       timeout: 5000,
       stdio: "ignore",
     });
@@ -56,17 +150,14 @@ export function checkPythonDeps(): boolean {
 }
 
 /**
- * Start the Python server and wait for it to report its port
- *
- * @param options Configuration options
- * @param options.timeout Timeout for server startup (default: 15000ms)
- * @param options.env Additional environment variables
- * @returns Server instance with process and port
+ * Start the Python server and wait for the `{"type":"ready","ok":true}` signal.
  */
-export async function startServer(options: {
-  timeout?: number;
-  env?: Record<string, string>;
-} = {}): Promise<ServerInstance> {
+export async function startServer(
+  options: {
+    timeout?: number;
+    env?: Record<string, string>;
+  } = {}
+): Promise<ServerInstance> {
   const { timeout = SERVER_STARTUP_TIMEOUT_MS, env = {} } = options;
 
   return new Promise((resolve, reject) => {
@@ -75,30 +166,45 @@ export async function startServer(options: {
     }, timeout);
 
     const proc = spawn("python3", [SERVER_SCRIPT_PATH], {
-      env: { ...process.env, PORT: "0", ...env },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PYTHONUNBUFFERED: "1", ...env },
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     let stdoutBuffer = "";
+    let readyReceived = false;
 
     proc.stdout?.on("data", (data: Buffer) => {
+      if (readyReceived) return; // Further messages belong to the RPC client
       stdoutBuffer += data.toString();
       const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() || "";
+      stdoutBuffer = lines.pop() ?? "";
 
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
         try {
-          const json = JSON.parse(trimmed);
-          if (json.port) {
+          const json = JSON.parse(trimmed) as {
+            type?: string;
+            ok?: boolean;
+            error?: string;
+          };
+          if (json.type === "ready") {
             clearTimeout(timeoutId);
-            resolve({ process: proc, port: json.port });
+            readyReceived = true;
+            if (json.ok) {
+              // Attach RPC client after "ready"; any leftover partial buffer is
+              // handed to the client so it picks up from where we left off.
+              const client = new StdioRpcClient(proc, stdoutBuffer);
+              stdoutBuffer = "";
+              resolve({ process: proc, client });
+            } else {
+              reject(new Error(json.error ?? "Server reported not ready"));
+            }
             return;
           }
         } catch {
-          // Not JSON, continue
+          // Non-JSON on stdout before ready is unexpected, ignore
         }
       }
     });
@@ -109,54 +215,16 @@ export async function startServer(options: {
     });
 
     proc.on("exit", (code) => {
-      clearTimeout(timeoutId);
-      reject(new Error(`Server exited with code ${code}`));
+      if (!readyReceived) {
+        clearTimeout(timeoutId);
+        reject(new Error(`Server exited with code ${code}`));
+      }
     });
   });
 }
 
 /**
- * Wait for the server to be ready by polling the health endpoint
- *
- * @param port Server port
- * @param options Configuration options
- * @param options.maxAttempts Maximum number of polling attempts
- * @param options.pollInterval Interval between polling attempts in milliseconds
- * @param options.timeout Timeout for each health check request
- */
-export async function waitForServerReady(
-  port: number,
-  options: {
-    maxAttempts?: number;
-    pollInterval?: number;
-    timeout?: number;
-  } = {}
-): Promise<void> {
-  const {
-    maxAttempts = SERVER_READY_MAX_ATTEMPTS,
-    pollInterval = SERVER_READY_POLL_INTERVAL_MS,
-    timeout = SERVER_READY_TIMEOUT_MS,
-  } = options;
-
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
-        signal: AbortSignal.timeout(timeout),
-      });
-      if (res.ok) return;
-    } catch {
-      // Not ready yet
-    }
-    await new Promise((r) => setTimeout(r, pollInterval));
-  }
-  throw new Error(`Server did not become ready after ${maxAttempts} attempts`);
-}
-
-/**
- * Stop a server process gracefully with fallback to force kill
- *
- * @param proc Child process to stop
- * @param timeout Timeout before force kill (default: 3000ms)
+ * Stop a server process gracefully (close stdin → SIGTERM → SIGKILL fallback).
  */
 export async function stopServer(
   proc: ChildProcess | null,
@@ -166,7 +234,11 @@ export async function stopServer(
 
   return new Promise<void>((resolve) => {
     const timeoutId = setTimeout(() => {
-      proc.kill("SIGKILL");
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // Already exited
+      }
       resolve();
     }, timeout);
 
@@ -175,12 +247,21 @@ export async function stopServer(
       resolve();
     });
 
-    proc.kill("SIGTERM");
+    try {
+      proc.stdin?.end();
+    } catch {
+      // Already closed
+    }
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // Already exited
+    }
   });
 }
 
 /**
- * Create a server lifecycle manager for use in beforeAll/afterAll hooks
+ * Create a server lifecycle manager for use in beforeAll/afterAll hooks.
  *
  * @example
  * ```typescript
@@ -195,48 +276,35 @@ export async function stopServer(
  * });
  *
  * it("should work", async () => {
- *   const port = serverLifecycle.port;
- *   // ... test code
+ *   const result = await serverLifecycle.client.request("evaluate", { ... });
  * });
  * ```
  */
 export function createServerLifecycle() {
   let serverProcess: ChildProcess | null = null;
-  let serverPort: number | null = null;
+  let serverClient: StdioRpcClient | null = null;
 
   return {
-    /**
-     * Start the server and wait for it to be ready
-     */
     async start(options: { env?: Record<string, string> } = {}): Promise<void> {
-      const { process, port } = await startServer(options);
+      const { process, client } = await startServer(options);
       serverProcess = process;
-      serverPort = port;
-      await waitForServerReady(port);
+      serverClient = client;
     },
 
-    /**
-     * Stop the server
-     */
     async stop(): Promise<void> {
       await stopServer(serverProcess);
       serverProcess = null;
-      serverPort = null;
+      serverClient = null;
     },
 
-    /**
-     * Get the server port (throws if not started)
-     */
-    get port(): number {
-      if (serverPort === null) {
+    /** RPC client (throws if not started) */
+    get client(): StdioRpcClient {
+      if (!serverClient) {
         throw new Error("Server not started");
       }
-      return serverPort;
+      return serverClient;
     },
 
-    /**
-     * Get the server process (may be null)
-     */
     get process(): ChildProcess | null {
       return serverProcess;
     },

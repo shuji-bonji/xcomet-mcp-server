@@ -48,24 +48,8 @@ export const SERVER_NAME = pkg.name;
 export const SERVER_VERSION = pkg.version;
 
 // =============================================================================
-// HTTP Server Configuration
-// =============================================================================
-
-/** Default HTTP port when running in HTTP transport mode */
-export const DEFAULT_HTTP_PORT = 3000;
-
-/** Default request body size limit */
-export const DEFAULT_BODY_LIMIT = "2mb";
-
-/** Default transport mode */
-export const DEFAULT_TRANSPORT = "stdio";
-
-// =============================================================================
 // Python Server Configuration
 // =============================================================================
-
-/** Maximum number of retries when starting Python server */
-export const PYTHON_MAX_RETRIES = 3;
 
 /** Health check interval in milliseconds (30 seconds) */
 export const PYTHON_HEALTH_CHECK_INTERVAL_MS = 30000;
@@ -82,20 +66,8 @@ export const PYTHON_RESTART_DELAY_MS = 2000;
 /** Timeout for Python server to start in milliseconds */
 export const PYTHON_SERVER_START_TIMEOUT_MS = 30000;
 
-/** Interval for polling server readiness in milliseconds */
-export const PYTHON_SERVER_READY_POLL_INTERVAL_MS = 100;
-
-/** Maximum number of attempts to check if server is ready */
-export const PYTHON_SERVER_READY_MAX_ATTEMPTS = 50;
-
-/** Timeout for health check requests in milliseconds */
-export const PYTHON_HEALTH_CHECK_TIMEOUT_MS = 500;
-
-/** Timeout for stats requests in milliseconds */
+/** Timeout for stats/health requests in milliseconds */
 export const PYTHON_STATS_TIMEOUT_MS = 5000;
-
-/** Timeout for shutdown request in milliseconds */
-export const PYTHON_SHUTDOWN_TIMEOUT_MS = 2000;
 
 /** Timeout for force kill after SIGTERM in milliseconds */
 export const PYTHON_KILL_TIMEOUT_MS = 5000;
@@ -158,8 +130,13 @@ export const HOMEBREW_PYTHON_PATHS = [
   "/usr/local/bin/python3",
 ] as const;
 
-/** Required Python packages for the server */
-export const REQUIRED_PYTHON_PACKAGES = ["comet", "fastapi"] as const;
+/**
+ * Required Python packages for the server.
+ *
+ * Only `comet` is needed since the server communicates over stdio
+ * (no fastapi/uvicorn required).
+ */
+export const REQUIRED_PYTHON_PACKAGES = ["comet"] as const;
 
 // =============================================================================
 // Quality Thresholds (for display purposes)

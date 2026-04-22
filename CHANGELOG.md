@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-23
+
+### Added
+
+- **Service-layer dependency injection**. `XCometService` now accepts an
+  optional `serverManager` argument (typed as the new `IPythonServerManager`
+  interface), enabling unit tests to run without spawning a Python process.
+  The default singleton behavior is preserved — `new XCometService()` and
+  `new XCometService(config)` remain unchanged for existing callers.
+- **Golden fixture regression suite**. `tests/fixtures/golden.json`
+  provides 20 representative cases spanning good / fair / poor quality
+  and edge cases (emoji, code blocks, multi-line). Each case declares a
+  `[score_min, score_max]` range rather than an exact score, so the suite
+  is robust against minor xCOMET drift while still catching regressions.
+  `tests/golden-fixtures.test.ts` runs one assertion per case against a
+  live Python worker; the whole suite auto-skips when `comet` is unavailable.
+- **XCometService unit tests** using the new DI surface —
+  `tests/xcomet-service-di.test.ts` covers parameter forwarding, reference
+  validation for WMT models, empty-batch short-circuit, and batch timeout
+  extrapolation — all without touching Python.
+
+### BREAKING CHANGES
+
+- **MCP HTTP transport removed**. The Node.js MCP server now supports
+  `stdio` transport only. The `TRANSPORT=http` mode, the `/mcp` endpoint,
+  the `/health` endpoint, and the `PORT` / `MCP_BODY_LIMIT` environment
+  variables have all been removed.
+  - **Why**: all supported MCP clients (Claude Desktop, Claude Code,
+    Cursor, Windsurf, etc.) connect via stdio. The HTTP path carried an
+    unauthenticated `/mcp` endpoint and a full `express` dependency for a
+    use case nobody had. Removing it tightens the default attack surface
+    and halves the top-level runtime dependency footprint.
+  - **Impact**: nobody invoking `xcomet-mcp-server` from an MCP client
+    config (`command` + `args`) is affected — stdio is the default and
+    is unchanged. Only users who explicitly ran `TRANSPORT=http npm start`
+    need to switch to stdio.
+  - If remote-access is needed in the future, it will be reintroduced as
+    a first-class SSE/Streamable HTTP transport with proper authentication.
+- **`express` and `@types/express` dependencies removed** from
+  `package.json`. Fewer installs, faster CI, smaller `node_modules`.
+
+### Changed
+
+- **Python transport: HTTP → stdio JSON-RPC**. The Node.js MCP server now
+  spawns the Python worker with a three-pipe stdio (`stdin`/`stdout`/`stderr`)
+  and speaks a line-delimited JSON-RPC protocol. No local HTTP listener,
+  no port binding, no `fetch()` calls for inference.
+  - Request shape: `{"id": <number>, "method": <str>, "params": <obj>}`
+  - Response shape: `{"id": <number>, "result": <obj>}` or `{"id": <number>, "error": <str>}`
+  - Startup handshake: Python emits `{"type": "ready", "ok": true}` on stdout
+  - Graceful shutdown: Node closes Python's stdin (EOF) instead of calling `/shutdown`
+- **Why**: removes a whole class of local-network concerns (port race,
+  health-check polling, port leak on crash), simplifies lifecycle, and
+  matches the way MCP itself talks over stdio.
+
+### Removed
+
+- **Python dependencies: `fastapi`, `uvicorn`, `pydantic`** are no longer
+  required. Only `unbabel-comet>=2.2.0` is needed on the Python side.
+- `PYTHON_HEALTH_CHECK_TIMEOUT_MS`, `PYTHON_SHUTDOWN_TIMEOUT_MS`,
+  `PYTHON_SERVER_READY_POLL_INTERVAL_MS`, `PYTHON_SERVER_READY_MAX_ATTEMPTS`,
+  `PYTHON_MAX_RETRIES` constants (no longer applicable).
+- `DEFAULT_HTTP_PORT`, `DEFAULT_BODY_LIMIT`, `DEFAULT_TRANSPORT` constants
+  (HTTP transport removed).
+- HTTP port detection from Python stdout.
+- `PythonServerManager.getPort()` (never part of the public surface).
+
+### Migration notes
+
+- **Users**: if your venv was set up before v0.5.0, you can uninstall
+  `fastapi`/`uvicorn`/`pydantic` after upgrading — they are now unused.
+  No config changes required; `XCOMET_PYTHON_PATH` / `XCOMET_MODEL` /
+  `XCOMET_PRELOAD` behave the same.
+- **If you were running the server via `TRANSPORT=http npm start`**:
+  switch to stdio. Any MCP client (Claude Desktop, Claude Code, Cursor,
+  etc.) can point directly at `node dist/index.js` or
+  `npx -y xcomet-mcp-server`.
+- **Stats field renames** (breaking for anyone who parsed `stats` output):
+  `evaluate_api_count` → `evaluate_rpc_count`,
+  `detect_errors_api_count` → `detect_errors_rpc_count`,
+  `batch_api_count` → `batch_rpc_count`.
+
 ## [0.4.0] - 2026-04-23
 
 ### Changed

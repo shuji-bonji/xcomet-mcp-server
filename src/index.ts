@@ -1,17 +1,9 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import express from "express";
 import { registerTools } from "./tools/index.js";
 import { shutdownServer } from "./services/xcomet.js";
-import {
-  SERVER_NAME,
-  SERVER_VERSION,
-  DEFAULT_HTTP_PORT,
-  DEFAULT_BODY_LIMIT,
-  DEFAULT_TRANSPORT,
-} from "./config/constants.js";
+import { SERVER_NAME, SERVER_VERSION } from "./config/constants.js";
 import { LogMessages } from "./config/errors.js";
 
 /**
@@ -43,59 +35,6 @@ async function runStdio(): Promise<void> {
 }
 
 /**
- * Run server with HTTP transport (for remote access)
- */
-async function runHTTP(): Promise<void> {
-  const server = createServer();
-  const app = express();
-
-  const bodyLimit = process.env.MCP_BODY_LIMIT || DEFAULT_BODY_LIMIT;
-  app.use(express.json({ limit: bodyLimit }));
-
-  // Health check endpoint
-  app.get("/health", (_req, res) => {
-    res.json({
-      status: "ok",
-      server: SERVER_NAME,
-      version: SERVER_VERSION,
-    });
-  });
-
-  // MCP endpoint
-  app.post("/mcp", async (req, res, next) => {
-    try {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      });
-
-      res.on("close", () => {
-        transport.close();
-      });
-
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("HTTP server error:", err);
-    if (res.headersSent) {
-      return;
-    }
-    res.status(500).json({ error: "Internal Server Error" });
-  });
-
-  const port = parseInt(process.env.PORT || String(DEFAULT_HTTP_PORT), 10);
-
-  app.listen(port, () => {
-    console.error(`${SERVER_NAME} v${SERVER_VERSION} running on http://localhost:${port}/mcp`);
-  });
-}
-
-/**
  * Graceful shutdown handler
  */
 async function gracefulShutdown(signal: string): Promise<void> {
@@ -114,18 +53,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
  * Main entry point
  */
 async function main(): Promise<void> {
-  const transport = process.env.TRANSPORT || DEFAULT_TRANSPORT;
-
   // Register shutdown handlers
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
   try {
-    if (transport === "http") {
-      await runHTTP();
-    } else {
-      await runStdio();
-    }
+    await runStdio();
   } catch (error) {
     console.error("Server error:", error);
     await shutdownServer();

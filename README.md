@@ -23,7 +23,7 @@ xCOMET MCP Server provides AI agents with the ability to evaluate machine transl
 ```mermaid
 graph LR
     A[AI Agent] --> B[Node.js MCP Server]
-    B --> C[Python FastAPI Server]
+    B -- stdio JSON-RPC --> C[Python Worker]
     C --> D[xCOMET Model<br/>Persistent in Memory]
     D --> C
     C --> B
@@ -44,13 +44,17 @@ xCOMET requires Python with several packages. We recommend using a virtual envir
 # If using uv (recommended - auto-downloads the correct Python version)
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+uv pip install "unbabel-comet>=2.2.0"
 
 # Or using standard venv (requires Python 3.9-3.12 already installed)
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+pip install "unbabel-comet>=2.2.0"
 ```
+
+> **Note (v0.5.0+)**: The Python worker now talks to Node.js over stdin/stdout
+> (line-delimited JSON-RPC). FastAPI, uvicorn, and pydantic are no longer
+> required — only `unbabel-comet` is.
 
 > **Note**: When using with Claude Desktop or other MCP hosts, set `XCOMET_PYTHON_PATH` to point to the venv Python (see [Configuration](#-configuration)).
 
@@ -169,14 +173,6 @@ If you cloned and built the repository locally (see [Installation](#-installatio
   }
 }
 ```
-
-### HTTP Mode (Remote Access)
-
-```bash
-TRANSPORT=http PORT=3000 npm start
-```
-
-Then connect to `http://localhost:3000/mcp`
 
 ## 🛠️ Available Tools
 
@@ -314,8 +310,6 @@ Then ask Claude:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
-| `PORT` | `3000` | HTTP server port (when TRANSPORT=http) |
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | xCOMET model to use |
 | `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
 | `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
@@ -381,9 +375,12 @@ This ensures the server works correctly even when the MCP host (e.g., Claude Des
 
 ## ⚡ Performance
 
-### Persistent Server Architecture (v0.3.0+)
+### Persistent Worker Architecture (v0.3.0+, stdio since v0.5.0)
 
-The server uses a **persistent Python FastAPI server** that keeps the xCOMET model loaded in memory:
+The server uses a **persistent Python worker process** that keeps the xCOMET
+model loaded in memory. The Node.js MCP server talks to the worker over
+stdin/stdout using a line-delimited JSON-RPC protocol — no local HTTP
+listener, no port binding, no FastAPI.
 
 | Request | Time | Notes |
 |---------|------|-------|
@@ -415,7 +412,7 @@ With preload enabled, **all requests are fast** (~500ms), including the first on
 ```mermaid
 graph LR
     A[MCP Request] --> B[Node.js Server]
-    B --> C[Python FastAPI Server]
+    B -- stdio JSON-RPC --> C[Python Worker]
     C --> D[xCOMET Model<br/>in Memory]
     D --> C
     C --> B

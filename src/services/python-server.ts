@@ -1,26 +1,30 @@
 /**
  * Python Server Manager
- * Manages a persistent Python FastAPI server for xCOMET inference.
+ *
+ * Manages a persistent Python process for xCOMET inference.
+ * Communicates over stdio using a line-delimited JSON-RPC protocol.
+ *
+ * Protocol (one JSON object per line):
+ *   Request:  {"id": <number>, "method": <str>, "params": <obj>}
+ *   Response: {"id": <number>, "result": <obj>}  OR  {"id": <number>, "error": <str>}
+ *   Ready:    {"type": "ready", "ok": true}       (emitted once at startup)
+ *
+ * All Python logs go to stderr. stdout is reserved for protocol messages.
  */
 
-import type { ChildProcess} from "child_process";
+import type { ChildProcess } from "child_process";
 import { spawn, execFileSync } from "child_process";
 import { existsSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
-  PYTHON_MAX_RETRIES,
-  PYTHON_HEALTH_CHECK_INTERVAL_MS,
   PYTHON_MAX_RESTARTS,
+  PYTHON_HEALTH_CHECK_INTERVAL_MS,
   PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART,
   PYTHON_RESTART_DELAY_MS,
   PYTHON_SERVER_START_TIMEOUT_MS,
-  PYTHON_SERVER_READY_POLL_INTERVAL_MS,
-  PYTHON_SERVER_READY_MAX_ATTEMPTS,
-  PYTHON_HEALTH_CHECK_TIMEOUT_MS,
   PYTHON_STATS_TIMEOUT_MS,
-  PYTHON_SHUTDOWN_TIMEOUT_MS,
   PYTHON_KILL_TIMEOUT_MS,
   PYTHON_DEPENDENCY_CHECK_TIMEOUT_MS,
   XCOMET_DEFAULT_MODEL,
@@ -62,12 +66,26 @@ export interface PythonServerConfig {
 
 interface ServerState {
   process: ChildProcess | null;
-  port: number | null;
   ready: boolean;
   starting: boolean;
   error: string | null;
   restartCount: number;
   consecutiveFailures: number;
+}
+
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: NodeJS.Timeout;
+  method: string;
+}
+
+interface ProtocolResponse {
+  id?: number;
+  result?: unknown;
+  error?: string;
+  type?: string;
+  ok?: boolean;
 }
 
 /**
@@ -93,7 +111,7 @@ function detectPythonPath(): string {
   const home = homedir();
 
   // Build import check command from required packages
-  const importCheck = REQUIRED_PYTHON_PACKAGES.map(pkg => `import ${pkg}`).join("; ");
+  const importCheck = REQUIRED_PYTHON_PACKAGES.map((pkg) => `import ${pkg}`).join("; ");
 
   // 2. Check pyenv versions
   const pyenvDir = join(home, ".pyenv", "versions");
@@ -152,11 +170,15 @@ function detectPythonPath(): string {
 
 /**
  * Python Server Manager class
+ *
+ * Spawns and supervises a Python child process that speaks our stdio
+ * JSON-RPC protocol. All inference requests are correlated by an integer
+ * id so the same process can handle concurrent-looking requests (the
+ * Python side serializes them under the GIL, but the Node API stays async).
  */
 export class PythonServerManager {
   private state: ServerState = {
     process: null,
-    port: null,
     ready: false,
     starting: false,
     error: null,
@@ -169,11 +191,16 @@ export class PythonServerManager {
   private startPromise: Promise<void> | null = null;
   private isRestarting: boolean = false;
 
+  // Stdio protocol state
+  private nextRequestId = 1;
+  private pending = new Map<number, PendingRequest>();
+  private stdoutBuffer = "";
+
   constructor(config: PythonServerConfig = {}) {
     this.config = {
       pythonPath: config.pythonPath || detectPythonPath(),
       model: config.model || process.env.XCOMET_MODEL || XCOMET_DEFAULT_MODEL,
-      maxRetries: config.maxRetries ?? PYTHON_MAX_RETRIES,
+      maxRetries: config.maxRetries ?? 3,
       healthCheckInterval: config.healthCheckInterval ?? PYTHON_HEALTH_CHECK_INTERVAL_MS,
       maxRestarts: config.maxRestarts ?? PYTHON_MAX_RESTARTS,
       preload: config.preload ?? (process.env.XCOMET_PRELOAD?.toLowerCase() === "true"),
@@ -236,65 +263,32 @@ export class PythonServerManager {
     const proc = spawn(this.config.pythonPath, [scriptPath], {
       env: {
         ...process.env,
-        PORT: "0", // Let the server pick a random port
         XCOMET_MODEL: this.config.model,
         XCOMET_PRELOAD: this.config.preload ? "true" : "false",
         PYTHONWARNINGS: "ignore",
+        PYTHONUNBUFFERED: "1",
         TOKENIZERS_PARALLELISM: "false",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     this.state.process = proc;
+    this.stdoutBuffer = "";
 
-    // Handle stdout to get the port (line-buffered for chunked JSON)
-    let portReceived = false;
-    let stdoutBuffer = "";
-    const portPromise = new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (!portReceived) {
-          reject(new Error(PythonServerErrors.startupTimeout));
-        }
-      }, PYTHON_SERVER_START_TIMEOUT_MS);
+    // Wire stdout: buffer incomplete lines, dispatch full JSON lines.
+    proc.stdout?.on("data", (data: Buffer) => {
+      this.stdoutBuffer += data.toString();
+      const lines = this.stdoutBuffer.split("\n");
+      this.stdoutBuffer = lines.pop() ?? "";
 
-      proc.stdout?.on("data", (data: Buffer) => {
-        stdoutBuffer += data.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          try {
-            const json = JSON.parse(trimmed);
-            if (json.port) {
-              portReceived = true;
-              clearTimeout(timeout);
-              resolve(json.port);
-              return;
-            }
-          } catch {
-            // Not JSON, log and continue
-            debugLog(`[xcomet-python] ${trimmed}`);
-          }
-        }
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-
-      proc.on("exit", (code) => {
-        if (!portReceived) {
-          clearTimeout(timeout);
-          reject(new Error(PythonServerErrors.exitedWithCode(code)));
-        }
-      });
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        this.dispatchMessage(trimmed);
+      }
     });
 
-    // Log stderr
+    // Log stderr (Python logs and warnings)
     proc.stderr?.on("data", (data: Buffer) => {
       const output = data.toString().trim();
       if (output) {
@@ -302,27 +296,57 @@ export class PythonServerManager {
       }
     });
 
+    // Wait for the "ready" signal
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.waitingForReady = null;
+        reject(new Error(PythonServerErrors.startupTimeout));
+      }, PYTHON_SERVER_START_TIMEOUT_MS);
+
+      this.waitingForReady = (err) => {
+        clearTimeout(timeout);
+        this.waitingForReady = null;
+        if (err) reject(err);
+        else resolve();
+      };
+
+      proc.on("error", (err) => {
+        clearTimeout(timeout);
+        if (this.waitingForReady) {
+          const cb = this.waitingForReady;
+          this.waitingForReady = null;
+          cb(err);
+        }
+      });
+
+      proc.on("exit", (code, signal) => {
+        if (this.waitingForReady) {
+          const cb = this.waitingForReady;
+          this.waitingForReady = null;
+          cb(new Error(PythonServerErrors.exitedWithCode(code)));
+        }
+        // Reject any in-flight requests
+        const exitError = new Error(
+          `Python server exited (code=${code}, signal=${signal ?? "none"})`
+        );
+        this.rejectAllPending(exitError);
+      });
+    });
+
     try {
-      const port = await portPromise;
-      this.state.port = port;
-      log(LogMessages.portReported(port));
-
-      // Wait for server to actually be ready (uvicorn takes a moment to start listening)
-      await this.waitForServerReady(port);
-
+      await readyPromise;
       this.state.ready = true;
       this.state.starting = false;
-      log(LogMessages.ready(port));
+      log(LogMessages.ready());
 
-      // Start health check
+      // Start periodic health check
       this.startHealthCheck();
 
-      // Handle process exit
+      // Handle process exit (after ready)
       proc.on("exit", (code) => {
         log(LogMessages.exited(code));
         this.state.ready = false;
         this.state.process = null;
-        this.state.port = null;
         this.stopHealthCheck();
       });
     } catch (error) {
@@ -338,43 +362,70 @@ export class PythonServerManager {
         }
       }
       this.state.process = null;
-      this.state.port = null;
 
       throw error;
     }
   }
 
   /**
-   * Wait for server to be ready by polling the health endpoint
+   * Optional callback for the "ready" signal. Set during _start().
    */
-  private async waitForServerReady(port: number, maxAttempts: number = PYTHON_SERVER_READY_MAX_ATTEMPTS): Promise<void> {
-    const url = `http://127.0.0.1:${port}/health`;
+  private waitingForReady: ((err?: Error) => void) | null = null;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), PYTHON_HEALTH_CHECK_TIMEOUT_MS);
-
-        const response = await fetch(url, {
-          method: "GET",
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          debugLog(`[xcomet] Server ready after ${attempt} attempt(s)`);
-          return;
-        }
-      } catch {
-        // Server not ready yet, wait and retry
-      }
-
-      // Wait before next attempt
-      await new Promise((resolve) => setTimeout(resolve, PYTHON_SERVER_READY_POLL_INTERVAL_MS));
+  /**
+   * Parse and dispatch a single JSON line from the child's stdout.
+   */
+  private dispatchMessage(line: string): void {
+    let msg: ProtocolResponse;
+    try {
+      msg = JSON.parse(line) as ProtocolResponse;
+    } catch {
+      debugLog(`[xcomet-python] (non-JSON stdout) ${line}`);
+      return;
     }
 
-    throw new Error(PythonServerErrors.readyTimeout(maxAttempts));
+    // "ready" signal
+    if (msg.type === "ready") {
+      if (this.waitingForReady) {
+        if (msg.ok) {
+          this.waitingForReady();
+        } else {
+          this.waitingForReady(new Error(msg.error ?? "Python server reported not ready"));
+        }
+      }
+      return;
+    }
+
+    // Response to a pending request
+    if (typeof msg.id === "number") {
+      const pending = this.pending.get(msg.id);
+      if (!pending) {
+        debugLog(`[xcomet] Received response for unknown request id=${msg.id}`);
+        return;
+      }
+      clearTimeout(pending.timer);
+      this.pending.delete(msg.id);
+
+      if (msg.error !== undefined) {
+        pending.reject(new Error(msg.error));
+      } else {
+        pending.resolve(msg.result);
+      }
+      return;
+    }
+
+    debugLog(`[xcomet-python] (unhandled message) ${line}`);
+  }
+
+  /**
+   * Reject all pending requests with the given error (used on process exit).
+   */
+  private rejectAllPending(err: Error): void {
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(err);
+    }
+    this.pending.clear();
   }
 
   /**
@@ -383,38 +434,29 @@ export class PythonServerManager {
   async stop(): Promise<void> {
     this.stopHealthCheck();
 
-    if (!this.state.process) {
+    const proc = this.state.process;
+    if (!proc) {
       return;
     }
 
     log(LogMessages.stopping);
 
-    // Try graceful shutdown first - direct fetch to avoid start() being called
-    if (this.state.port) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), PYTHON_SHUTDOWN_TIMEOUT_MS);
-        await fetch(`http://127.0.0.1:${this.state.port}/shutdown`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-      } catch {
-        // Ignore errors during shutdown
-      }
+    // Graceful shutdown: closing stdin causes the server's main loop to
+    // exit on EOF. No /shutdown endpoint needed.
+    try {
+      proc.stdin?.end();
+    } catch {
+      // Already closed
     }
 
     // Wait for process to exit or kill it
     await new Promise<void>((resolve) => {
-      const proc = this.state.process;
-      if (!proc) {
-        resolve();
-        return;
-      }
-
       const timeout = setTimeout(() => {
-        proc.kill("SIGKILL");
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // Already exited
+        }
         resolve();
       }, PYTHON_KILL_TIMEOUT_MS);
 
@@ -423,67 +465,80 @@ export class PythonServerManager {
         resolve();
       });
 
-      proc.kill("SIGTERM");
+      // SIGTERM as a courtesy nudge (EOF on stdin should already trigger exit)
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // Already exited
+      }
     });
 
+    // Reject any still-pending requests
+    this.rejectAllPending(new Error("Python server stopped"));
+
     this.state.process = null;
-    this.state.port = null;
     this.state.ready = false;
   }
 
   /**
-   * Make an HTTP request to the Python server
+   * Send a request to the Python server and await a correlated response.
+   *
+   * @param method  RPC method name (e.g. "evaluate", "detect_errors", "batch_evaluate", "health", "stats")
+   * @param params  Method parameters (sent as the `params` object)
+   * @param timeout Per-request timeout in milliseconds
    */
   async request<T>(
-    path: string,
-    method: "GET" | "POST" = "GET",
-    body?: unknown,
+    method: string,
+    params: Record<string, unknown> = {},
     timeout: number = XCOMET_DEFAULT_TIMEOUT_MS
   ): Promise<T> {
     // Ensure server is started
     await this.start();
 
-    if (!this.state.port) {
+    const proc = this.state.process;
+    if (!proc || !proc.stdin || proc.stdin.destroyed) {
       throw new Error(PythonServerErrors.notRunning);
     }
 
-    const url = `http://127.0.0.1:${this.state.port}${path}`;
+    const id = this.nextRequestId++;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(PythonServerErrors.requestTimeout));
+        }
+      }, timeout);
 
-    try {
-      const response = await fetch(url, {
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
         method,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: response.statusText })) as { detail?: string };
-        throw new Error(errorData.detail || `HTTP ${response.status}`);
+      const payload = JSON.stringify({ id, method, params }) + "\n";
+      try {
+        proc.stdin!.write(payload, (err) => {
+          if (err) {
+            clearTimeout(timer);
+            this.pending.delete(id);
+            reject(err);
+          }
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
-
-      return await response.json() as T;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(PythonServerErrors.requestTimeout);
-      }
-      throw error;
-    }
+    });
   }
 
   /**
-   * Health check
+   * Health check - lightweight ping that also returns model load state.
    */
   async healthCheck(): Promise<{ status: string; model_loaded: boolean; model_name: string }> {
-    return this.request("/health", "GET", undefined, PYTHON_STATS_TIMEOUT_MS);
+    return this.request("health", {}, PYTHON_STATS_TIMEOUT_MS);
   }
 
   /**
@@ -501,7 +556,13 @@ export class PythonServerManager {
         this.state.consecutiveFailures = 0;
       } catch (error) {
         this.state.consecutiveFailures++;
-        log(LogMessages.healthCheckFailed(this.state.consecutiveFailures, PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART, error));
+        log(
+          LogMessages.healthCheckFailed(
+            this.state.consecutiveFailures,
+            PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART,
+            error
+          )
+        );
 
         // Auto-restart after consecutive failures
         if (this.state.consecutiveFailures >= PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART) {
@@ -532,11 +593,16 @@ export class PythonServerManager {
       // Stop the current server
       this.stopHealthCheck();
       if (this.state.process) {
+        try {
+          this.state.process.stdin?.end();
+        } catch {
+          // Ignore
+        }
         this.state.process.kill("SIGTERM");
         this.state.process = null;
       }
+      this.rejectAllPending(new Error("Python server is restarting"));
       this.state.ready = false;
-      this.state.port = null;
       this.state.consecutiveFailures = 0;
 
       // Wait a bit before restarting
@@ -570,13 +636,6 @@ export class PythonServerManager {
   }
 
   /**
-   * Get server port
-   */
-  getPort(): number | null {
-    return this.state.port;
-  }
-
-  /**
    * Get Python path being used
    */
   getPythonPath(): string {
@@ -597,14 +656,14 @@ export class PythonServerManager {
     uptime_seconds: number | null;
     model_loaded: boolean;
     model_load_time_ms: number | null;
-    evaluate_api_count: number;
-    detect_errors_api_count: number;
-    batch_api_count: number;
+    evaluate_rpc_count: number;
+    detect_errors_rpc_count: number;
+    batch_rpc_count: number;
     total_pairs_evaluated: number;
     total_inference_time_ms: number;
     avg_inference_time_ms: number | null;
   }> {
-    return this.request("/stats", "GET", undefined, PYTHON_STATS_TIMEOUT_MS);
+    return this.request("stats", {}, PYTHON_STATS_TIMEOUT_MS);
   }
 
   /**

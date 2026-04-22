@@ -1,8 +1,13 @@
 /**
- * Integration tests for Python server management
+ * Integration tests for Python server management (stdio JSON-RPC)
  *
- * These tests verify the actual behavior of the Python server startup/shutdown.
- * They require Python with fastapi and uvicorn installed.
+ * These tests verify that the stdio-based Python server:
+ *   - emits the `{"type":"ready","ok":true}` signal on startup
+ *   - responds to `health` and `stats` RPCs
+ *   - shuts down cleanly when stdin is closed
+ *
+ * Requires Python with the `comet` package installed. The whole suite
+ * is skipped when dependencies are not available.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import type { ChildProcess } from "child_process";
@@ -16,7 +21,7 @@ import {
 
 const hasPythonDeps = checkPythonDeps();
 
-describe.skipIf(!hasPythonDeps)("Python Server Integration", () => {
+describe.skipIf(!hasPythonDeps)("Python Server Integration (stdio)", () => {
   let serverProcess: ChildProcess | null = null;
 
   afterEach(async () => {
@@ -24,86 +29,76 @@ describe.skipIf(!hasPythonDeps)("Python Server Integration", () => {
     serverProcess = null;
   });
 
-  it("should start server and report port via stdout", async () => {
-    const { process, port } = await startServer({ timeout: 10000 });
+  it("should emit the ready signal on startup", async () => {
+    const { process } = await startServer({ timeout: 10000 });
     serverProcess = process;
-
-    expect(port).toBeGreaterThan(0);
-    expect(port).toBeLessThan(65536);
+    // If startServer resolved, the ready signal was received.
+    expect(process.killed).toBe(false);
   });
 
-  it("should respond to health check after startup", async () => {
-    const { process, port } = await startServer({ timeout: 10000 });
+  it("should respond to the health RPC", async () => {
+    const { process, client } = await startServer({ timeout: 10000 });
     serverProcess = process;
 
-    // Wait for server to be ready
-    await new Promise((r) => setTimeout(r, 500));
+    const data = await client.request<{
+      status: string;
+      model_loaded: boolean;
+      model_name: string;
+    }>("health");
 
-    // Check health endpoint
-    const response = await fetch(`http://127.0.0.1:${port}/health`);
-    expect(response.ok).toBe(true);
-
-    const data = await response.json();
     expect(data.status).toBe("ok");
     expect(data).toHaveProperty("model_loaded");
     expect(data).toHaveProperty("model_name");
   });
 
-  it("should return stats with new field names", async () => {
-    const { process, port } = await startServer({ timeout: 10000 });
+  it("should return stats with RPC-style field names", async () => {
+    const { process, client } = await startServer({ timeout: 10000 });
     serverProcess = process;
 
-    // Wait for server to be ready
-    await new Promise((r) => setTimeout(r, 500));
+    const data = await client.request<Record<string, unknown>>("stats");
 
-    // Check stats endpoint
-    const response = await fetch(`http://127.0.0.1:${port}/stats`);
-    expect(response.ok).toBe(true);
-
-    const data = await response.json();
-
-    // New field names should exist
-    expect(data).toHaveProperty("evaluate_api_count");
-    expect(data).toHaveProperty("detect_errors_api_count");
-    expect(data).toHaveProperty("batch_api_count");
+    // New RPC-style field names should exist
+    expect(data).toHaveProperty("evaluate_rpc_count");
+    expect(data).toHaveProperty("detect_errors_rpc_count");
+    expect(data).toHaveProperty("batch_rpc_count");
     expect(data).toHaveProperty("total_pairs_evaluated");
 
-    // Old field names should NOT exist
-    expect(data).not.toHaveProperty("evaluation_count");
-    expect(data).not.toHaveProperty("batch_count");
+    // Legacy HTTP-era field names should NOT exist
+    expect(data).not.toHaveProperty("evaluate_api_count");
+    expect(data).not.toHaveProperty("detect_errors_api_count");
+    expect(data).not.toHaveProperty("batch_api_count");
   });
 
-  it("should shutdown gracefully via /shutdown endpoint", async () => {
-    const { process, port } = await startServer({ timeout: 10000 });
+  it("should shutdown gracefully when stdin is closed", async () => {
+    const { process } = await startServer({ timeout: 10000 });
     serverProcess = process;
 
-    // Wait for server to be ready
-    await new Promise((r) => setTimeout(r, 500));
-
-    // Call shutdown endpoint
-    const response = await fetch(`http://127.0.0.1:${port}/shutdown`, {
-      method: "POST",
+    const exited = new Promise<number | null>((resolve) => {
+      process.on("exit", (code) => resolve(code));
     });
-    expect(response.ok).toBe(true);
 
-    const data = await response.json();
-    expect(data.status).toBe("shutting_down");
+    // Close stdin to signal graceful shutdown (EOF)
+    process.stdin?.end();
 
-    // Wait a moment for the shutdown to complete
-    await new Promise((r) => setTimeout(r, 2000));
+    // Wait for the server to exit (allow generous time for model teardown)
+    const code = await Promise.race([
+      exited,
+      new Promise<number | null>((resolve) => setTimeout(() => resolve(-1), 5000)),
+    ]);
 
-    // Verify server is no longer responding
-    try {
-      await fetch(`http://127.0.0.1:${port}/health`, {
-        signal: AbortSignal.timeout(1000)
-      });
-      // If we get here, server is still running - that's unexpected but ok
-    } catch {
-      // Expected - server should be down
-    }
+    // 0 = clean exit; some Python versions may return null when signaled.
+    // The key thing is that it exited without us having to SIGKILL.
+    expect(code).not.toBe(-1);
+    serverProcess = null; // exited; skip cleanup
+  });
 
-    // Cleanup handled by afterEach
-    serverProcess = null;
+  it("should reject unknown methods with an error response", async () => {
+    const { process, client } = await startServer({ timeout: 10000 });
+    serverProcess = process;
+
+    await expect(client.request("this_method_does_not_exist")).rejects.toThrow(
+      /Unknown method/
+    );
   });
 });
 

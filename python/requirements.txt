@@ -1,7 +1,7 @@
 # xCOMET Server dependencies
-fastapi>=0.100.0
-uvicorn>=0.23.0
-pydantic>=2.0.0
+#
+# Starting in v0.5.0 the Python server communicates with the Node side
+# over stdin/stdout (line-delimited JSON-RPC), so FastAPI/uvicorn/pydantic
+# are no longer required. Only the xCOMET model itself is needed.
 
-# xCOMET (should already be installed)
 unbabel-comet>=2.2.0

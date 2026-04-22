@@ -3,7 +3,6 @@
  * Uses a persistent Python server for fast inference.
  */
 
-import type { PythonServerManager } from "./python-server.js";
 import { getServerManager, shutdownServer } from "./python-server.js";
 import type { EvaluateOutput, DetectErrorsOutput, BatchEvaluateOutput } from "../schemas/index.js";
 import {
@@ -52,16 +51,37 @@ const DEFAULT_CONFIG: XCometConfig = {
 };
 
 /**
+ * Minimal interface that XCometService requires from a Python server manager.
+ *
+ * This abstraction exists so tests (and future alternative backends) can inject
+ * a mock implementation without spawning a real Python process. The singleton
+ * exported by `python-server.ts` satisfies this interface.
+ */
+export interface IPythonServerManager {
+  request<T>(method: string, params: Record<string, unknown>, timeout?: number): Promise<T>;
+  healthCheck(): Promise<{ model_loaded: boolean; model_name: string }>;
+  getPythonPath(): string;
+  getModel(): string;
+}
+
+/**
  * xCOMET Service class for translation quality evaluation
  * Uses a persistent Python server for efficient model inference.
+ *
+ * Supports constructor injection of a `PythonServerManager` (or any object
+ * satisfying `IPythonServerManager`) for testability. When omitted, the
+ * process-wide singleton is used — preserving v0.4.x behavior.
  */
 export class XCometService {
   private config: XCometConfig;
-  private serverManager: PythonServerManager;
+  private serverManager: IPythonServerManager;
 
-  constructor(config: Partial<XCometConfig> = {}) {
+  constructor(
+    config: Partial<XCometConfig> = {},
+    serverManager?: IPythonServerManager,
+  ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.serverManager = getServerManager({
+    this.serverManager = serverManager ?? getServerManager({
       pythonPath: config.pythonPath,
       model: this.config.model,
     });
@@ -129,12 +149,16 @@ export class XCometService {
       throw new Error(XCometServiceErrors.referenceRequired(this.config.model));
     }
 
-    const result = await this.serverManager.request<EvaluateOutput>("/evaluate", "POST", {
-      source,
-      translation,
-      reference,
-      use_gpu: useGpu,
-    }, this.config.timeout);
+    const result = await this.serverManager.request<EvaluateOutput>(
+      "evaluate",
+      {
+        source,
+        translation,
+        reference,
+        use_gpu: useGpu,
+      },
+      this.config.timeout
+    );
 
     return result;
   }
@@ -149,13 +173,17 @@ export class XCometService {
     minSeverity: "minor" | "major" | "critical" = "minor",
     useGpu: boolean = false
   ): Promise<DetectErrorsOutput> {
-    const result = await this.serverManager.request<DetectErrorsOutput>("/detect_errors", "POST", {
-      source,
-      translation,
-      reference,
-      min_severity: minSeverity,
-      use_gpu: useGpu,
-    }, this.config.timeout);
+    const result = await this.serverManager.request<DetectErrorsOutput>(
+      "detect_errors",
+      {
+        source,
+        translation,
+        reference,
+        min_severity: minSeverity,
+        use_gpu: useGpu,
+      },
+      this.config.timeout
+    );
 
     return result;
   }
@@ -191,11 +219,15 @@ export class XCometService {
     const perPairTime = useGpu ? XCOMET_GPU_PER_PAIR_TIME_MS : XCOMET_CPU_PER_PAIR_TIME_MS;
     const timeout = this.config.timeout + pairs.length * perPairTime;
 
-    const result = await this.serverManager.request<BatchEvaluateOutput>("/batch_evaluate", "POST", {
-      pairs,
-      batch_size: batchSize,
-      use_gpu: useGpu,
-    }, timeout);
+    const result = await this.serverManager.request<BatchEvaluateOutput>(
+      "batch_evaluate",
+      {
+        pairs,
+        batch_size: batchSize,
+        use_gpu: useGpu,
+      },
+      timeout
+    );
 
     return result;
   }

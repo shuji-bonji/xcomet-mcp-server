@@ -22,10 +22,6 @@ export const PythonServerErrors = {
   /** Request timeout */
   requestTimeout: "Request timeout",
 
-  /** Server failed to become ready */
-  readyTimeout: (attempts: number) =>
-    `Server failed to become ready after ${attempts} attempts`,
-
   /** Server exited with code */
   exitedWithCode: (code: number | null) =>
     `Python server exited with code ${code}`,
@@ -60,13 +56,12 @@ export const AvailabilityErrors = {
     `Python not found at "${pythonPath}". Please install Python 3.8+ and dependencies:\n` +
     `  1. Install Python: https://www.python.org/downloads/\n` +
     `  2. Install xCOMET: pip install 'unbabel-comet>=2.2.0'\n` +
-    `  3. Install server deps: pip install fastapi uvicorn\n` +
-    `  4. Set XCOMET_PYTHON_PATH if using pyenv/venv`,
+    `  3. Set XCOMET_PYTHON_PATH if using pyenv/venv`,
 
   /** Missing Python dependencies */
   missingDependencies: (pythonPath: string) =>
     `Missing Python dependencies. Run:\n` +
-    `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.0' fastapi uvicorn`,
+    `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.0'`,
 
   /** General Python server failure */
   serverFailed: (errorMessage: string, pythonPath: string) =>
@@ -95,13 +90,8 @@ export const LogMessages = {
   starting: (pythonPath: string) =>
     `[xcomet] Starting Python server with ${pythonPath}`,
 
-  /** Server reported port */
-  portReported: (port: number) =>
-    `[xcomet] Python server reported port ${port}, waiting for server to be ready...`,
-
   /** Server is ready */
-  ready: (port: number) =>
-    `[xcomet] Python server is ready on port ${port}`,
+  ready: () => `[xcomet] Python server is ready (stdio)`,
 
   /** Server exited */
   exited: (code: number | null) =>

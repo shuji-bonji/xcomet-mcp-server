@@ -23,7 +23,7 @@ xCOMET MCP Server は、AI エージェントに機械翻訳の品質評価機�
 ```mermaid
 graph LR
     A[AI エージェント] --> B[Node.js MCP サーバー]
-    B --> C[Python FastAPI サーバー]
+    B -- stdio JSON-RPC --> C[Python ワーカー]
     C --> D[xCOMET モデル<br/>メモリ常駐]
     D --> C
     C --> B
@@ -44,13 +44,17 @@ xCOMET には複数の Python パッケージが必要です。仮想環境（ve
 # uv を使う場合（推奨 — 適切な Python バージョンを自動ダウンロード）
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+uv pip install "unbabel-comet>=2.2.0"
 
 # 標準の venv を使う場合（Python 3.9-3.12 が既にインストールされている必要あり）
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0" "fastapi>=0.100.0" "uvicorn>=0.23.0" "pydantic>=2.0.0"
+pip install "unbabel-comet>=2.2.0"
 ```
+
+> **Note (v0.5.0+)**: Python ワーカーは Node.js と stdin/stdout 上の
+> 行区切り JSON-RPC で通信します。FastAPI / uvicorn / pydantic は
+> 不要になりました（必要なのは `unbabel-comet` のみ）。
 
 > **注意**: Claude Desktop 等の MCP ホストから利用する場合は、`XCOMET_PYTHON_PATH` に venv の Python パスを指定してください（[設定](#設定)を参照）。
 
@@ -169,14 +173,6 @@ npm install -g xcomet-mcp-server
   }
 }
 ```
-
-### HTTP モード（リモートアクセス）
-
-```bash
-TRANSPORT=http PORT=3000 npm start
-```
-
-`http://localhost:3000/mcp` に接続
 
 ## 利用可能なツール
 
@@ -314,8 +310,6 @@ Claude への指示例：
 
 | 変数 | デフォルト | 説明 |
 |----------|---------|-------------|
-| `TRANSPORT` | `stdio` | トランスポートモード: `stdio` または `http` |
-| `PORT` | `3000` | HTTP サーバーポート（TRANSPORT=http の場合） |
 | `XCOMET_MODEL` | `Unbabel/XCOMET-XL` | 使用する xCOMET モデル |
 | `XCOMET_PYTHON_PATH` | （自動検出） | Python 実行ファイルのパス（下記参照） |
 | `XCOMET_PRELOAD` | `false` | 起動時にモデルをプリロード（v0.3.1+） |
@@ -381,9 +375,11 @@ Claude への指示例：
 
 ## パフォーマンス
 
-### 永続サーバーアーキテクチャ（v0.3.0+）
+### 永続ワーカーアーキテクチャ（v0.3.0+, v0.5.0 から stdio）
 
-サーバーは xCOMET モデルをメモリに保持する**永続 Python FastAPI サーバー**を使用します：
+サーバーは xCOMET モデルをメモリに保持する**永続 Python ワーカー**を使用します。
+Node.js の MCP サーバーはワーカーと stdin/stdout 上の行区切り JSON-RPC で
+通信するため、ローカル HTTP リスナーもポートバインドも FastAPI も不要です。
 
 | リクエスト | 時間 | 備考 |
 |---------|------|-------|
@@ -415,7 +411,7 @@ Claude への指示例：
 ```mermaid
 graph LR
     A[MCP リクエスト] --> B[Node.js サーバー]
-    B --> C[Python FastAPI サーバー]
+    B -- stdio JSON-RPC --> C[Python ワーカー]
     C --> D[xCOMET モデル<br/>メモリ常駐]
     D --> C
     C --> B
