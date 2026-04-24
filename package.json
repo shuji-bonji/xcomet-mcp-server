@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,7 @@
     "lint:fix": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:stress": "vitest run --config vitest.stress.config.ts",
     "inspect": "npx @modelcontextprotocol/inspector",
     "prepublishOnly": "npm run clean && npm run build"
   },

@@ -33,24 +33,7 @@ import {
   REQUIRED_PYTHON_PACKAGES,
 } from "../config/constants.js";
 import { PythonServerErrors, LogMessages } from "../config/errors.js";
-
-const DEBUG = process.env.XCOMET_DEBUG === "true";
-
-/**
- * Debug logging helper
- */
-function debugLog(message: string): void {
-  if (DEBUG) {
-    console.error(message);
-  }
-}
-
-/**
- * Always log (errors and important events)
- */
-function log(message: string): void {
-  console.error(message);
-}
+import { logger } from "../utils/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -257,8 +240,8 @@ export class PythonServerManager {
 
     const scriptPath = this.getServerScriptPath();
 
-    log(LogMessages.starting(this.config.pythonPath));
-    debugLog(`[xcomet] Model: ${this.config.model}`);
+    logger.info(LogMessages.starting(this.config.pythonPath));
+    logger.debug(`[xcomet] Model: ${this.config.model}`);
 
     const proc = spawn(this.config.pythonPath, [scriptPath], {
       env: {
@@ -292,8 +275,48 @@ export class PythonServerManager {
     proc.stderr?.on("data", (data: Buffer) => {
       const output = data.toString().trim();
       if (output) {
-        debugLog(`[xcomet-python] ${output}`);
+        logger.debug(`[xcomet-python] ${output}`);
       }
+    });
+
+    // Single unified exit/error handler.
+    //
+    // Handles both pre-ready and post-ready exits:
+    //   - If we're still waiting on the "ready" signal, reject the start
+    //     promise via `waitingForReady`.
+    //   - Reject all pending RPCs so callers see the failure.
+    //   - Tear down state so the manager looks "stopped".
+    //   - Stop health checks (no-op if not yet started).
+    //
+    // Listener registration is done once per spawn, before we await ready.
+    proc.on("error", (err) => {
+      if (this.waitingForReady) {
+        const cb = this.waitingForReady;
+        this.waitingForReady = null;
+        cb(err);
+      }
+      this.rejectAllPending(err);
+    });
+
+    proc.on("exit", (code, signal) => {
+      const exitError = new Error(
+        `Python server exited (code=${code}, signal=${signal ?? "none"})`,
+      );
+
+      if (this.waitingForReady) {
+        const cb = this.waitingForReady;
+        this.waitingForReady = null;
+        cb(new Error(PythonServerErrors.exitedWithCode(code)));
+      } else {
+        // Only log "exited" once we'd reached ready — pre-ready exits are
+        // surfaced via the start() rejection instead.
+        logger.info(LogMessages.exited(code));
+      }
+
+      this.rejectAllPending(exitError);
+      this.state.ready = false;
+      this.state.process = null;
+      this.stopHealthCheck();
     });
 
     // Wait for the "ready" signal
@@ -309,46 +332,16 @@ export class PythonServerManager {
         if (err) reject(err);
         else resolve();
       };
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        if (this.waitingForReady) {
-          const cb = this.waitingForReady;
-          this.waitingForReady = null;
-          cb(err);
-        }
-      });
-
-      proc.on("exit", (code, signal) => {
-        if (this.waitingForReady) {
-          const cb = this.waitingForReady;
-          this.waitingForReady = null;
-          cb(new Error(PythonServerErrors.exitedWithCode(code)));
-        }
-        // Reject any in-flight requests
-        const exitError = new Error(
-          `Python server exited (code=${code}, signal=${signal ?? "none"})`
-        );
-        this.rejectAllPending(exitError);
-      });
     });
 
     try {
       await readyPromise;
       this.state.ready = true;
       this.state.starting = false;
-      log(LogMessages.ready());
+      logger.info(LogMessages.ready);
 
       // Start periodic health check
       this.startHealthCheck();
-
-      // Handle process exit (after ready)
-      proc.on("exit", (code) => {
-        log(LogMessages.exited(code));
-        this.state.ready = false;
-        this.state.process = null;
-        this.stopHealthCheck();
-      });
     } catch (error) {
       this.state.starting = false;
       this.state.error = error instanceof Error ? error.message : String(error);
@@ -380,7 +373,7 @@ export class PythonServerManager {
     try {
       msg = JSON.parse(line) as ProtocolResponse;
     } catch {
-      debugLog(`[xcomet-python] (non-JSON stdout) ${line}`);
+      logger.debug(`[xcomet-python] (non-JSON stdout) ${line}`);
       return;
     }
 
@@ -400,7 +393,7 @@ export class PythonServerManager {
     if (typeof msg.id === "number") {
       const pending = this.pending.get(msg.id);
       if (!pending) {
-        debugLog(`[xcomet] Received response for unknown request id=${msg.id}`);
+        logger.debug(`[xcomet] Received response for unknown request id=${msg.id}`);
         return;
       }
       clearTimeout(pending.timer);
@@ -414,7 +407,7 @@ export class PythonServerManager {
       return;
     }
 
-    debugLog(`[xcomet-python] (unhandled message) ${line}`);
+    logger.debug(`[xcomet-python] (unhandled message) ${line}`);
   }
 
   /**
@@ -429,6 +422,56 @@ export class PythonServerManager {
   }
 
   /**
+   * Gracefully terminate a child process: close stdin (EOF) → SIGTERM →
+   * SIGKILL after `PYTHON_KILL_TIMEOUT_MS`. Resolves once the process has
+   * actually exited (or was killed).
+   *
+   * Used by both `stop()` and `attemptRestart()` so that we never start a
+   * fresh Python worker while the previous one is still alive — avoiding
+   * a brief window of double xCOMET model load (multi-GB GPU / RAM).
+   */
+  private async terminateProcess(proc: ChildProcess): Promise<void> {
+    // If the process has already exited, nothing to do.
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      return;
+    }
+
+    // Graceful shutdown: closing stdin causes the server's main loop to
+    // exit on EOF. No /shutdown endpoint needed.
+    try {
+      proc.stdin?.end();
+    } catch {
+      // Already closed
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // Already exited
+        }
+        // SIGKILL is reliable; the exit listener below will resolve. We
+        // give it a final beat to fire before resolving anyway, so
+        // resources are reclaimed before the next start.
+      }, PYTHON_KILL_TIMEOUT_MS);
+
+      proc.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      // SIGTERM as a courtesy nudge (EOF on stdin should already trigger exit)
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // Already exited — the once("exit", ...) listener will still fire
+        // if the process exits naturally; otherwise the timeout cleans up.
+      }
+    });
+  }
+
+  /**
    * Stop the Python server
    */
   async stop(): Promise<void> {
@@ -439,39 +482,9 @@ export class PythonServerManager {
       return;
     }
 
-    log(LogMessages.stopping);
+    logger.info(LogMessages.stopping);
 
-    // Graceful shutdown: closing stdin causes the server's main loop to
-    // exit on EOF. No /shutdown endpoint needed.
-    try {
-      proc.stdin?.end();
-    } catch {
-      // Already closed
-    }
-
-    // Wait for process to exit or kill it
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Already exited
-        }
-        resolve();
-      }, PYTHON_KILL_TIMEOUT_MS);
-
-      proc.on("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      // SIGTERM as a courtesy nudge (EOF on stdin should already trigger exit)
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        // Already exited
-      }
-    });
+    await this.terminateProcess(proc);
 
     // Reject any still-pending requests
     this.rejectAllPending(new Error("Python server stopped"));
@@ -556,7 +569,7 @@ export class PythonServerManager {
         this.state.consecutiveFailures = 0;
       } catch (error) {
         this.state.consecutiveFailures++;
-        log(
+        logger.info(
           LogMessages.healthCheckFailed(
             this.state.consecutiveFailures,
             PYTHON_HEALTH_CHECK_FAILURES_BEFORE_RESTART,
@@ -581,24 +594,25 @@ export class PythonServerManager {
     }
 
     if (this.state.restartCount >= this.config.maxRestarts) {
-      log(PythonServerErrors.maxRestartsReached(this.config.maxRestarts));
+      logger.info(PythonServerErrors.maxRestartsReached(this.config.maxRestarts));
       return;
     }
 
     this.isRestarting = true;
     this.state.restartCount++;
-    log(LogMessages.attemptingRestart(this.state.restartCount, this.config.maxRestarts));
+    logger.info(LogMessages.attemptingRestart(this.state.restartCount, this.config.maxRestarts));
 
     try {
-      // Stop the current server
+      // Stop the current server.
+      //
+      // We *await* termination (EOF → SIGTERM → SIGKILL fallback) so the
+      // old Python process is fully gone before we spawn a new one.
+      // Without this we briefly held two xCOMET workers in memory, each
+      // attempting to load the model.
       this.stopHealthCheck();
-      if (this.state.process) {
-        try {
-          this.state.process.stdin?.end();
-        } catch {
-          // Ignore
-        }
-        this.state.process.kill("SIGTERM");
+      const oldProc = this.state.process;
+      if (oldProc) {
+        await this.terminateProcess(oldProc);
         this.state.process = null;
       }
       this.rejectAllPending(new Error("Python server is restarting"));
@@ -610,9 +624,9 @@ export class PythonServerManager {
 
       // Start a new server
       await this._start();
-      log(LogMessages.restartSuccessful);
+      logger.info(LogMessages.restartSuccessful);
     } catch (error) {
-      log(LogMessages.restartFailed(error));
+      logger.info(LogMessages.restartFailed(error));
     } finally {
       this.isRestarting = false;
     }

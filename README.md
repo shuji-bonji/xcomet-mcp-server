@@ -80,7 +80,7 @@ python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')
 
 ### Node.js
 
-- Node.js >= 18.0.0
+- Node.js >= 22.0.0 (matches `engines.node` in `package.json`; CI runs on 22 and 24)
 - npm or yarn
 
 ## 📦 Installation
@@ -314,6 +314,7 @@ Then ask Claude:
 | `XCOMET_PYTHON_PATH` | (auto-detect) | Python executable path (see below) |
 | `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
 | `XCOMET_DEBUG` | `false` | Enable verbose debug logging (v0.3.1+) |
+| `XCOMET_NUM_WORKERS` | `1` | DataLoader workers for `model.predict()` (v0.6.0+). Increase to better utilize idle CPU cores when running large batches, especially on GPU. Invalid values silently fall back to `1`. |
 
 ### Model Selection
 

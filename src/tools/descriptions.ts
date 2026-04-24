@@ -18,6 +18,7 @@ Args:
   - source_lang (string, optional): Source language code (ISO 639-1)
   - target_lang (string, optional): Target language code (ISO 639-1)
   - response_format ('json' | 'markdown'): Output format (default: 'json')
+  - use_gpu (boolean, optional): Use GPU for inference if available (default: false)
 
 Returns:
   For JSON format:
@@ -50,6 +51,7 @@ Args:
   - reference (string, optional): Reference translation
   - min_severity ('minor' | 'major' | 'critical'): Minimum severity to report (default: 'minor')
   - response_format ('json' | 'markdown'): Output format (default: 'json')
+  - use_gpu (boolean, optional): Use GPU for inference if available (default: false)
 
 Returns:
   {
@@ -88,6 +90,9 @@ Args:
   - source_lang (string, optional): Source language code
   - target_lang (string, optional): Target language code
   - response_format ('json' | 'markdown'): Output format (default: 'json')
+  - use_gpu (boolean, optional): Use GPU for inference if available (default: false)
+  - batch_size (number, optional): Inference batch size, 1-64 (default: 8).
+    Larger = faster but uses more memory.
 
 Returns:
   {

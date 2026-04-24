@@ -49,27 +49,20 @@ describe.skipIf(!hasPythonDeps)("User Scenarios", () => {
   // 1. 境界値・エッジケース
   // ============================================================
   describe("1. Edge Cases and Boundary Values", () => {
-    // Skip: Empty strings cause model to hang - needs server-side validation
-    it.skip("should handle empty strings gracefully", async () => {
+    // Empty strings used to hang the xCOMET model. Since v0.5.x the Python
+    // worker rejects them up front via the `_require()` helper, surfaced
+    // as an RPC error containing "must not be empty".
+    it("should reject empty strings with a clear error", async () => {
       await expect(
         server.client.request("evaluate", { source: "", translation: "" })
-      ).resolves.toBeDefined();
+      ).rejects.toThrow(/must not be empty/i);
     });
 
-    // Skip: Long text takes too long for regular CI - run manually for stress testing
-    it.skip("should handle very long text (1000+ characters)", async () => {
-      const longText = "これはテストです。".repeat(100); // ~900 chars
-      const longTranslation = "This is a test. ".repeat(100);
-
-      const result = await server.client.request<EvaluateResult>(
-        "evaluate",
-        { source: longText, translation: longTranslation },
-        180000
-      );
-
-      expect(result).toHaveProperty("score");
-      expect(typeof result.score).toBe("number");
-    }, 200000);
+    // Long text (1000+ chars) is a stress test, not a unit-level concern.
+    // Lives in tests/stress/long-text.stress.test.ts and runs via
+    //   npm run test:stress
+    // — kept out of the default `npm test` because inference latency on
+    // CPU is unbounded.
 
     it("should handle special characters and emojis", async () => {
       const result = await server.client.request<EvaluateResult>("evaluate", {

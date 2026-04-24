@@ -1,6 +1,6 @@
 # xCOMET MCP Server テストドキュメント
 
-このドキュメントでは、xCOMET MCP Server のテストスイートについて説明します。
+このドキュメントでは、xCOMET MCP Server のテストスイートについて説明します（v0.5.0+ stdio JSON-RPC 構成）。
 
 ## テスト概要
 
@@ -10,34 +10,58 @@ graph TD
         A[npm test] --> B[Vitest]
         B --> C[line-buffer.test.ts]
         B --> D[stop-race-condition.test.ts]
-        B --> E[integration.test.ts]
-        B --> F[user-scenarios.test.ts]
+        B --> E[xcomet-service-di.test.ts]
+        B --> F[golden-fixtures.test.ts]
+        B --> G[integration.test.ts]
+        B --> H[user-scenarios.test.ts]
     end
 
     subgraph "テスト対象"
-        C --> G[ポート検出<br/>チャンク処理]
-        D --> H[stop関数<br/>レース条件]
-        E --> I[Pythonサーバー<br/>統合テスト]
-        F --> J[利用者視点<br/>シナリオテスト]
-    end
-
-    subgraph "カテゴリ"
-        G --> K["Fix #1: stdout分割"]
-        H --> L["Fix #2: start()呼出回避"]
-        I --> M["Fix #3,4: ポート/統計"]
-        J --> N["エッジケース/品質/性能"]
+        C --> C1[stdout 行バッファ]
+        D --> D1[stop が start を呼ばない]
+        E --> E1[XCometService DI]
+        F --> F1[xCOMET スコア range]
+        G --> G1[Python サーバ統合]
+        H --> H1[利用者シナリオ E2E]
     end
 ```
 
 ## テストファイル一覧
 
-| ファイル | テスト数 | 種別 | 対象 |
-|---------|---------|------|------|
-| `line-buffer.test.ts` | 9 | ユニット | TypeScript |
-| `stop-race-condition.test.ts` | 5 | ユニット | TypeScript |
-| `integration.test.ts` | 5 | 統合 | Python + TypeScript |
-| `user-scenarios.test.ts` | 28 | E2E | 利用者シナリオ |
-| **合計** | **47** | - | - |
+| ファイル | 区分 | 種別 | Python 必須 |
+|---------|------|------|-------------|
+| `line-buffer.test.ts` | ユニット | TypeScript | 不要 |
+| `stop-race-condition.test.ts` | ユニット | TypeScript | 不要 |
+| `xcomet-service-di.test.ts` | ユニット (DI) | TypeScript | 不要 |
+| `golden-fixtures.test.ts` | リグレッション | Python + TS | 必要（無ければ skip） |
+| `integration.test.ts` | 統合 | Python + TS | 必要（無ければ skip） |
+| `user-scenarios.test.ts` | E2E | Python + TS | 必要（無ければ skip） |
+
+`comet` パッケージが未インストールの環境では Python 必須テストは自動スキップされます。
+
+---
+
+## v0.5.0 で何が変わったか
+
+v0.4.x までは Python サーバが FastAPI/uvicorn でローカル HTTP リスナーを立て、Node 側が `fetch()` で叩く構成でした。v0.5.0 で **stdio + 行区切り JSON-RPC** に切り替わったため、テスト群も以下の通り更新されています。
+
+```mermaid
+flowchart LR
+    subgraph "v0.4.x (HTTP era)"
+        A1[Node] -->|fetch /evaluate| A2[Python FastAPI]
+        A2 -.->|stdout: port=N| A1
+    end
+
+    subgraph "v0.5.0 (stdio era)"
+        B1[Node] -->|stdin: line-JSON| B2[Python loop]
+        B2 -->|stdout: line-JSON| B1
+        B2 -->|ready signal| B1
+    end
+```
+
+- **ポート検出は廃止** — Python は `{"type":"ready","ok":true}` を一度だけ stdout に書く
+- **`/shutdown` エンドポイント廃止** — Node が child の stdin を close（EOF）→ Python は readline ループを抜けて exit
+- **stats フィールドは `*_rpc_count` 系**（旧 `*_api_count` は削除）
 
 ---
 
@@ -45,54 +69,34 @@ graph TD
 
 ### 問題の背景
 
-Python サーバーはポート番号を JSON 形式で stdout に出力します。しかし、パイプバッファリングにより出力が複数チャンクに分割される可能性があります。
+stdio 上を流れるメッセージは「1 JSON object / 1 行」ですが、`stdout.on('data')` の chunk 境界は任意の位置で割れます。ここを安全に処理できているかを検証します。
 
 ```mermaid
 sequenceDiagram
-    participant P as Python Server
-    participant B as stdout Buffer
-    participant N as Node.js
+    participant P as Python
+    participant N as Node (parser)
 
-    P->>B: {"por
-    Note over B: チャンク1
-    B->>N: {"por
-    P->>B: t": 12345}
-    Note over B: チャンク2
-    B->>N: t": 12345}
-    Note over N: 行バッファで結合して<br/>JSON.parse成功
+    P->>N: '{"type":"re'
+    Note over N: buffer に保留
+    P->>N: 'ady","ok":'
+    Note over N: buffer に保留
+    P->>N: 'true}\n'
+    Note over N: 行が完成 → JSON.parse 成功
 ```
 
 ### テストケース
 
 | テスト名 | 説明 |
 |---------|------|
-| `should parse complete JSON in single chunk` | 単一チャンクでの正常パース |
-| `should handle JSON split across multiple chunks` | 複数チャンクに分割されたJSONの処理 |
-| `should handle JSON with preceding log output` | ログ出力が先行する場合 |
-| `should handle multiple lines in single chunk` | 1チャンクに複数行が含まれる場合 |
-| `should handle chunk boundary in the middle of JSON` | JSON途中でのチャンク分割 |
-| `should ignore incomplete JSON at end of stream` | 不完全なJSONの無視 |
-| `should handle empty chunks` | 空チャンクの処理 |
-| `should handle Windows-style line endings` | CRLF改行コードの処理 |
-| `should handle no port in output` | ポート情報がない場合 |
-
-### 行バッファリングアルゴリズム
-
-```mermaid
-flowchart TD
-    A[データ受信] --> B[バッファに追加]
-    B --> C[改行で分割]
-    C --> D{未完了の行?}
-    D -->|Yes| E[バッファに保持]
-    D -->|No| F[各行を処理]
-    F --> G{JSON?}
-    G -->|Yes| H{portあり?}
-    G -->|No| I[デバッグログ]
-    H -->|Yes| J[ポート取得完了]
-    H -->|No| I
-    I --> K[次の行へ]
-    K --> F
-```
+| `parses a ready message delivered in one chunk` | 単一チャンクの `ready` 信号 |
+| `handles a ready message split across multiple chunks` | チャンク分割された `ready` |
+| `delivers multiple response messages from a single chunk` | 1 チャンクに複数レスポンス |
+| `interleaves ready and response messages in order` | `ready` とレスポンスの順序保持 |
+| `keeps a partial trailing line in the buffer` | 末尾の部分行をバッファに残す |
+| `handles an empty chunk between messages` | 空チャンクの安全な処理 |
+| `handles Windows-style line endings` | CRLF 改行 |
+| `silently drops non-JSON lines on stdout` | 不正な行を無視 |
+| `surfaces an error response when the server reports a failure` | `error` フィールドの伝播 |
 
 ---
 
@@ -100,28 +104,27 @@ flowchart TD
 
 ### 問題の背景
 
-修正前の `stop()` メソッドは `request()` を経由して `/shutdown` を呼び出していました。`request()` は内部で `start()` を呼ぶため、停止処理中に新しいサーバーが起動する問題がありました。
+HTTP 時代の旧バグ：`stop()` が `request("/shutdown")` を呼び、`request()` が auto-start を経由して新しいプロセスを生んでいました。stdio 化後の現在は EOF + SIGTERM + SIGKILL fallback で停止しますが、**「stop は start を絶対に呼ばない」というインバリアントは引き続き守る必要がある** ため、バグった実装と正しい実装を対比して固定しています。
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant M as Manager
-    participant S as Server
+    participant S as Process
 
-    rect rgb(255, 200, 200)
-        Note over U,S: 修正前（バグあり）
+    rect rgb(255, 220, 220)
+        Note over U,S: 修正前 (HTTP 時代の罠)
         U->>M: stop()
-        M->>M: request("/shutdown")
-        M->>M: start() が呼ばれる!
-        M->>S: 新サーバー起動
-        M->>S: /shutdown
+        M->>M: request("shutdown")
+        M->>M: start() (auto)
+        M->>S: 新しいプロセス起動
     end
 
-    rect rgb(200, 255, 200)
-        Note over U,S: 修正後
+    rect rgb(220, 255, 220)
+        Note over U,S: 現在 (stdio)
         U->>M: stop()
-        M->>S: 直接 fetch("/shutdown")
-        Note over M: start()は呼ばれない
+        M->>S: stdin.end() / SIGTERM
+        Note over M: start() は呼ばない
     end
 ```
 
@@ -129,101 +132,113 @@ sequenceDiagram
 
 | テスト名 | 説明 |
 |---------|------|
-| `fixed stop() should not call start() when server is running` | 実行中サーバー停止時にstart()が呼ばれない |
-| `fixed stop() should not call start() when server is not running` | 未実行時にstart()が呼ばれない |
-| `buggy stop() would call start() unnecessarily` | 修正前のバグ動作を確認 |
-| `fixed stop() should handle missing port gracefully` | ポートなしでも安全に停止 |
-| `fixed stop() should skip shutdown request when no process` | プロセスなしでスキップ |
+| `fixed stop() closes stdin and sends SIGTERM without re-starting` | 正しい挙動の検証 |
+| `fixed stop() is a safe no-op when nothing is running` | プロセス無しでも安全 |
+| `buggy stop() (for contrast) would restart the server unnecessarily` | 旧バグを反証として残す |
 
-### 修正のポイント
+---
+
+## 3. XCometService DI テスト (`xcomet-service-di.test.ts`)
+
+### 設計意図
+
+`IPythonServerManager` をモック注入することで、**Python プロセスを spawn せずに** XCometService の振る舞いを検証します。これにより CI（Python 無し）でもサービス層の主要パスをカバーできます。
 
 ```mermaid
 flowchart LR
-    subgraph "修正前"
-        A1[stop] --> B1[request]
-        B1 --> C1[start]
-        C1 --> D1[fetch]
-    end
-
-    subgraph "修正後"
-        A2[stop] --> D2[直接fetch]
-    end
-```
-
----
-
-## 3. 統合テスト (`integration.test.ts`)
-
-### テスト対象
-
-実際の Python サーバーを起動して、エンドポイントの動作を検証します。
-
-```mermaid
-flowchart TD
-    subgraph "統合テストフロー"
-        A[Python サーバー起動] --> B[ポート取得]
-        B --> C[エンドポイントテスト]
-        C --> D[/health]
-        C --> E[/stats]
-        C --> F[/shutdown]
-        D --> G[レスポンス検証]
-        E --> G
-        F --> G
-        G --> H[サーバー停止]
-    end
+    A[XCometService] -->|inject| B[IPythonServerManager]
+    B --> C{prod?}
+    C -->|yes| D[PythonServerManager singleton]
+    C -->|no| E[Mock with recorded calls]
+    E --> F[ユニットテストで検証]
 ```
 
 ### テストケース
 
 | テスト名 | 説明 |
 |---------|------|
-| `should start server and report port via stdout` | サーバー起動とポート報告 |
-| `should respond to health check after startup` | ヘルスチェック応答 |
-| `should return stats with new field names` | 新統計フィールドの確認 |
-| `should shutdown gracefully via /shutdown endpoint` | グレースフルシャットダウン |
-| `should have server.py in python directory` | server.py の存在確認 |
-
-### 統計フィールドの変更
-
-```mermaid
-graph LR
-    subgraph "修正前"
-        A1[evaluation_count]
-        A2[batch_count]
-    end
-
-    subgraph "修正後"
-        B1[evaluate_api_count]
-        B2[detect_errors_api_count]
-        B3[batch_api_count]
-        B4[total_pairs_evaluated]
-    end
-
-    A1 -.->|分離| B1
-    A1 -.->|分離| B2
-    A2 -.->|名称変更| B3
-```
+| `forwards evaluate parameters to the injected manager` | パラメータ転送 |
+| `rejects evaluate without reference for WMT models` | reference 必須モデルの事前検証 |
+| `forwards detectErrors parameters correctly` | detect_errors 経路 |
+| `short-circuits batchEvaluate when pairs is empty` | 空配列で RPC を発生させない |
+| `extends batch timeout proportionally to pair count` | バッチタイムアウト計算 |
+| `validates batch reference requirement for WMT models` | バッチでの reference 検証 |
+| `exposes python path and model from the injected manager` | 委譲メソッド |
 
 ---
 
-## 4. 利用者シナリオテスト (`user-scenarios.test.ts`)
+## 4. Golden Fixtures (`golden-fixtures.test.ts`)
 
-### テスト概要
+### 設計意図
 
-実際の利用者視点でのエンドツーエンドテストです。xCOMET モデルを使用した品質評価の実際の動作を検証します。
+xCOMET の出力はハードウェア・ライブラリバージョンで微妙に揺れるため、**完全一致ではなく `[score_min, score_max]` の範囲アサーション** で安定性とリグレッション検出を両立しています。
+
+`tests/fixtures/golden.json` には good / fair / poor 各 3 件以上、計 20 件以上のケースが定義されています。
+
+```mermaid
+flowchart TD
+    A[golden.json: 20+ cases] --> B{Python あり?}
+    B -->|no| C[全ケース skip]
+    B -->|yes| D[1 case ごとに 1 it]
+    D --> E[evaluate RPC]
+    E --> F{score in [min, max]?}
+    F -->|yes| G[pass]
+    F -->|no| H[fail with case id]
+```
+
+### メタテスト（Python 不要・常時実行）
+
+| テスト名 | 説明 |
+|---------|------|
+| `fixture file parses` | JSON が読める |
+| `contains at least 20 cases` | 規模の下限 |
+| `every case has required fields` | スキーマ検証 |
+| `has balanced quality distribution` | good/fair/poor の均衡 |
+
+---
+
+## 5. 統合テスト (`integration.test.ts`)
+
+実際の Python サーバを spawn して、stdio JSON-RPC プロトコルの初期化・基本 RPC・シャットダウンを検証します。
+
+```mermaid
+flowchart TD
+    A[startServer 起動] --> B[ready signal 受信]
+    B --> C[health RPC]
+    B --> D[stats RPC]
+    B --> E[stdin.end による graceful shutdown]
+    C --> F[応答検証]
+    D --> F
+    E --> G[exit code 確認]
+```
+
+### テストケース
+
+| テスト名 | 説明 |
+|---------|------|
+| `should emit the ready signal on startup` | `{"type":"ready","ok":true}` の発行 |
+| `should respond to the health RPC` | health の status/model_loaded/model_name |
+| `should return stats with RPC-style field names` | `evaluate_rpc_count` 等の存在確認、旧 `*_api_count` の不在 |
+| `should shutdown gracefully when stdin is closed` | EOF だけで終了する |
+| `should reject unknown methods with an error response` | 未知メソッドのエラー返却 |
+| `should have server.py in python directory` | スクリプト存在確認 |
+
+---
+
+## 6. 利用者シナリオテスト (`user-scenarios.test.ts`)
+
+実利用に近い E2E。stdio JSON-RPC クライアント (`StdioRpcClient`) を介して xCOMET モデルを叩きます。
 
 ```mermaid
 graph TD
     subgraph "1. 境界値・エッジケース"
-        A1[空文字列]
-        A2[長文テキスト]
-        A3[特殊文字・絵文字]
-        A4[コードブロック]
-        A5[HTMLタグ]
-        A6[改行・空白]
+        A1[特殊文字・絵文字]
+        A2[コードブロック]
+        A3[HTML タグ]
+        A4[改行・タブ]
     end
 
-    subgraph "2. 言語ペア"
+    subgraph "2. 言語ペア (8)"
         B1[ja → en/de/fr/es/it]
         B2[en → ja]
         B3[zh → en]
@@ -231,10 +246,9 @@ graph TD
     end
 
     subgraph "3. エラーハンドリング"
-        C1[null値]
-        C2[必須フィールド欠落]
-        C3[不正なJSON]
-        C4[大量バッチ]
+        C1[必須フィールド欠落]
+        C2[未知の RPC メソッド]
+        C3[最大 500 件バッチ]
     end
 
     subgraph "4. 品質検証"
@@ -242,90 +256,23 @@ graph TD
         D2[訳抜け]
         D3[不自然な訳]
         D4[正確な訳]
-        D5[エラー検出API]
+        D5[detect_errors 経路]
     end
 
     subgraph "5. パフォーマンス"
-        E1[連続リクエスト]
-        E2[並列リクエスト]
-        E3[応答時間安定性]
-        E4[高負荷耐性]
+        E1[連続 10 リクエスト]
+        E2[並列 5 リクエスト]
+        E3[応答時間の安定性]
+        E4[20 件の高速 health]
     end
 ```
 
-### テストケース一覧
+### スキップしているテスト
 
-#### 1. 境界値・エッジケース (6テスト)
+`describe.skipIf(!hasPythonDeps)` 経由で Python 不在環境では自動スキップされますが、Python ありの環境ではすべて実行されます。`it.skip` での恒久スキップは現在ありません（v0.5.x 以降）。
 
-| テスト名 | 説明 | タイムアウト |
-|---------|------|------------|
-| `should handle empty strings gracefully` | 空文字列の処理 | 90秒 |
-| `should handle very long text` | 長文（900文字+）の処理 | 120秒 |
-| `should handle special characters and emojis` | `🚀 @user #tag $100` など | - |
-| `should handle code blocks in text` | `` `map()` `` などのコード | - |
-| `should handle HTML tags in text` | `<code>` タグなど | - |
-| `should handle newlines and whitespace` | 改行・タブの処理 | - |
-
-#### 2. 言語ペア (8テスト)
-
-| 言語ペア | ソース例 | 翻訳例 |
-|---------|---------|-------|
-| ja → en | こんにちは | Hello |
-| ja → de | こんにちは | Hallo |
-| ja → fr | こんにちは | Bonjour |
-| ja → es | こんにちは | Hola |
-| ja → it | こんにちは | Ciao |
-| en → ja | Hello | こんにちは |
-| zh → en | 你好 | Hello |
-| ko → en | 안녕하세요 | Hello |
-
-#### 3. エラーハンドリング (5テスト)
-
-| テスト名 | 期待するステータス |
-|---------|------------------|
-| `should reject null source` | 400 or 422 |
-| `should reject missing translation field` | 400 or 422 |
-| `should handle invalid JSON gracefully` | 400 or 422 |
-| `should handle batch with maximum pairs (500)` | 200 |
-| `should reject batch exceeding maximum pairs` | 200, 400, 413, or 422 |
-
-#### 4. 品質検証シナリオ (5テスト)
-
-```mermaid
-graph LR
-    subgraph "入力"
-        A1["非同期処理"] --> B1["synchronous processing"]
-        A2["RxJSは強力で柔軟なライブラリです"] --> B2["RxJS is a library"]
-        A3["購読を解除する"] --> B3["cancel the subscription following"]
-        A4["ユーザー認証が完了しました"] --> B4["User authentication completed"]
-    end
-
-    subgraph "検証"
-        B1 --> C1["誤訳検出"]
-        B2 --> C2["訳抜け検出"]
-        B3 --> C3["不自然さ検出"]
-        B4 --> C4["高スコア期待"]
-    end
-```
-
-#### 5. パフォーマンス・安定性 (4テスト)
-
-| テスト名 | 説明 |
-|---------|------|
-| `should handle sequential requests` | 10件の連続リクエスト |
-| `should handle concurrent requests` | 5件の並列リクエスト |
-| `should maintain stable response times` | 応答時間の標準偏差を測定 |
-| `should recover from rapid requests` | 20件の高速リクエスト後の復旧 |
-
-### パフォーマンス指標（参考値）
-
-```
-Sequential requests: avg=584ms, min=573ms, max=608ms
-Concurrent requests (5): total=2916ms
-Stability: avg=591ms, stdDev=19ms
-```
-
-> **Note**: 上記の値は環境により大きく異なります。初回リクエストはモデルロード時間（25-90秒）がかかります。
+> **Note**: 以前あった `should handle empty strings gracefully` は v0.5.x の Python 側 `_require()` ヘルパ追加に伴い、`should reject empty strings with a clear error` として通常テストへ復帰しています。  
+> `should handle very long text (1000+ characters)` は CPU 上で推論時間が読めないため、`tests/stress/long-text.stress.test.ts` に分離して `npm run test:stress` でのみ実行する設計になっています。
 
 ---
 
@@ -361,60 +308,31 @@ npx vitest run --coverage
 
 ### Node.js 側
 
-- Node.js 18.0.0 以上
+- Node.js >= 22.0.0
 - `npm install` で依存関係をインストール済み
 
-### Python 側（統合テスト用）
+### Python 側（統合・E2E・golden テスト用）
 
-- Python 3.8 以上
-- 以下のパッケージがインストール済み:
-  - `unbabel-comet`
+- Python 3.9 - 3.12（xCOMET 依存の都合）
+- `unbabel-comet>=2.2.0`
 
 ```bash
 pip install "unbabel-comet>=2.2.0"
 ```
 
 > **Note (v0.5.0+)**: Python ワーカーは stdio JSON-RPC で通信するため、
-> FastAPI/uvicorn は不要です。
-
----
-
-## テストアーキテクチャ
-
-```mermaid
-graph TB
-    subgraph "テストレイヤー"
-        UT[ユニットテスト]
-        IT[統合テスト]
-    end
-
-    subgraph "テストフレームワーク"
-        V[Vitest]
-    end
-
-    subgraph "テスト対象コード"
-        TS[TypeScript<br/>python-server.ts]
-        PY[Python<br/>server.py]
-    end
-
-    V --> UT
-    V --> IT
-    UT --> TS
-    IT --> TS
-    IT --> PY
-```
+> FastAPI / uvicorn / pydantic は不要です。
 
 ---
 
 ## CI/CD での実行
 
-GitHub Actions などで実行する場合の例:
+GitHub Actions では Python なしのスモーク（line-buffer / stop-race / DI / golden meta）のみ走らせています。Python ありのフルスイートはローカルまたは GPU ランナーでの実行を想定。
 
 ```yaml
-- name: Run tests
+- name: Run tests (no Python)
   run: |
     npm ci
-    pip install "unbabel-comet>=2.2.0"
     npm test
 ```
 
@@ -424,13 +342,12 @@ GitHub Actions などで実行する場合の例:
 
 ### 統合テストがスキップされる
 
-Python の依存関係がインストールされていない場合、統合テストは自動的にスキップされます。
+Python の `comet` モジュールが import できない環境では、`describe.skipIf(!hasPythonDeps)` で自動的にスキップされます。
 
 ```bash
-# 依存関係をインストール
 pip install "unbabel-comet>=2.2.0"
 ```
 
 ### タイムアウトエラー
 
-サーバーの起動に時間がかかる環境では、`vitest.config.ts` の `testTimeout` を調整してください。
+初回モデルロード（25-90 秒）を含むため、`vitest.config.ts` の `testTimeout` または個別 `it` の第3引数で延長してください。

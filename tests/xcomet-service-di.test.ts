@@ -43,7 +43,7 @@ function makeMockManager(
       return response as T;
     },
     async healthCheck() {
-      return { model_loaded: true, model_name: "mock-model" };
+      return { status: "ok", model_loaded: true, model_name: "mock-model" };
     },
     getPythonPath() {
       return "/mock/python";

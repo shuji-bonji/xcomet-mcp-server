@@ -35,11 +35,17 @@ function getModel(): string {
 }
 
 /**
- * Check if the given model requires a reference translation
+ * Check if the given model requires a reference translation.
+ *
+ * Uses case-insensitive *exact* match against `REFERENCE_REQUIRED_MODELS`.
+ * Substring matching was previously used but is brittle: a future model
+ * named e.g. `Unbabel/wmt22-comet-da-v2-experimental` would match
+ * unintentionally.
  */
 function modelRequiresReference(model: string): boolean {
+  const normalized = model.toLowerCase();
   return REFERENCE_REQUIRED_MODELS.some(
-    (refModel) => model.toLowerCase().includes(refModel.toLowerCase().replace("unbabel/", ""))
+    (refModel) => refModel.toLowerCase() === normalized,
   );
 }
 
@@ -59,7 +65,7 @@ const DEFAULT_CONFIG: XCometConfig = {
  */
 export interface IPythonServerManager {
   request<T>(method: string, params: Record<string, unknown>, timeout?: number): Promise<T>;
-  healthCheck(): Promise<{ model_loaded: boolean; model_name: string }>;
+  healthCheck(): Promise<{ status: string; model_loaded: boolean; model_name: string }>;
   getPythonPath(): string;
   getModel(): string;
 }

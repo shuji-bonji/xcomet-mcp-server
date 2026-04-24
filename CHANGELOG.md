@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-24
+
+### Added
+
+- **`src/utils/logger.ts`** — centralized stderr-only logger
+  (`logger.debug` / `info` / `warn` / `error`). All `console.error`
+  calls in `src/index.ts` and `src/services/python-server.ts` now go
+  through it. Reinforces the MCP stdio invariant that nothing must
+  pollute stdout.
+- **`tests/restart-await-exit.test.ts`** — regression test pinning
+  down that `attemptRestart()` waits for the previous Python process
+  to exit (cooperative SIGTERM or SIGKILL fallback) before spawning a
+  new one. Prevents short-lived double-load of the multi-GB xCOMET
+  model.
+- **Python: `XCOMET_NUM_WORKERS` env var** — overrides DataLoader
+  `num_workers` for `model.predict()`. Default remains 1.
+- **Python: `_stats_lock`** — guards `_stats` counter updates with a
+  `threading.Lock` as a forward-compatible safety net for any future
+  multi-threaded dispatch (current main loop is strictly serial).
+- **Python: `_require()` helper** — raises a friendly
+  `missing required parameter: "X"` ValueError instead of an opaque
+  `KeyError` when RPC params are missing.
+
+### Changed
+
+- **`modelRequiresReference` is now an exact case-insensitive match**
+  (was substring-based). A future model named e.g.
+  `Unbabel/wmt22-comet-da-v2-experimental` would previously have been
+  misclassified as requiring a reference. The Python and TypeScript
+  implementations are now in sync — `REFERENCE_REQUIRED_MODELS` lives
+  in `src/config/constants.ts` and a mirror tuple in `python/server.py`
+  with a comment pointing back to the canonical list.
+- **`PythonServerManager._start()` exit/error handling consolidated.**
+  Previously `proc.on("exit", ...)` was registered twice (once inside
+  `readyPromise`, once after ready). Now a single unified handler covers
+  both pre-ready and post-ready exits, makes the lifecycle easier to
+  follow, and always rejects pending RPCs and tears down state.
+- **`attemptRestart()` now awaits the old process exit** via the new
+  `terminateProcess()` helper (EOF → SIGTERM → SIGKILL after
+  `PYTHON_KILL_TIMEOUT_MS`). The same helper is shared with `stop()`.
+- **`IPythonServerManager.healthCheck()` return type** now includes
+  `status: string` to match the actual implementation. Mock manager in
+  `tests/xcomet-service-di.test.ts` updated accordingly.
+- **`LogMessages.ready` is now a plain string** (was a no-arg function),
+  consistent with the other static log message constants.
+- **Tool descriptions** for `xcomet_evaluate`, `xcomet_detect_errors`,
+  and `xcomet_batch_evaluate` now document `use_gpu` (and
+  `batch_size` for the batch tool) — these were silently missing.
+
+### Tests
+
+- **`should reject empty strings with a clear error`** — previously
+  `it.skip`'d (model would hang on empty input). Now reactivated and
+  asserts the new `_require()` rejection path (`/must not be empty/i`).
+- **Stress suite split out** to `tests/stress/**/*.stress.test.ts`
+  with its own `vitest.stress.config.ts` (5-minute test timeout) and
+  the `npm run test:stress` script. The default `npm test` excludes
+  `tests/stress/**`. The previously skipped 1000+ character long-text
+  case lives there as `tests/stress/long-text.stress.test.ts`.
+
+### Documentation
+
+- **README (en/ja) Node.js requirement aligned to `>= 22.0.0`** to match
+  `package.json#engines.node` and the CI matrix (was incorrectly listed
+  as `>= 18.0.0`).
+- **`tests/README.md` rewritten for v0.5.0** — removes obsolete HTTP-era
+  references (`port detection`, `/shutdown`, `*_api_count`) and reflects
+  the current stdio JSON-RPC suite (line-buffer, stop-race, DI, golden
+  fixtures, integration, user-scenarios), plus the new stress suite.
+
 ## [0.5.0] - 2026-04-23
 
 ### Added

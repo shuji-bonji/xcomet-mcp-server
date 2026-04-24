@@ -91,7 +91,7 @@ export const LogMessages = {
     `[xcomet] Starting Python server with ${pythonPath}`,
 
   /** Server is ready */
-  ready: () => `[xcomet] Python server is ready (stdio)`,
+  ready: "[xcomet] Python server is ready (stdio)",
 
   /** Server exited */
   exited: (code: number | null) =>

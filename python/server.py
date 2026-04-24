@@ -32,6 +32,12 @@ _model = None
 _model_name: Optional[str] = None
 _model_lock = threading.Lock()
 
+# `_stats` is updated from RPC handlers. Today the main loop is strictly
+# single-threaded (one `sys.stdin.readline()` at a time), so there is no
+# realistic contention. The lock is kept as a cheap safety net so that any
+# future change to a thread/asyncio dispatcher does not silently corrupt
+# counters via non-atomic `dict[k] += n`.
+_stats_lock = threading.Lock()
 _stats: Dict[str, Any] = {
     "start_time": None,
     "model_load_time": None,
@@ -41,6 +47,13 @@ _stats: Dict[str, Any] = {
     "total_pairs_evaluated": 0,
     "total_inference_time_ms": 0,
 }
+
+
+def _bump_stats(**deltas: int) -> None:
+    """Atomically increment one or more `_stats` counters."""
+    with _stats_lock:
+        for key, delta in deltas.items():
+            _stats[key] += delta
 
 
 # -----------------------------------------------------------------------------
@@ -81,9 +94,49 @@ def get_model():
     return _model
 
 
+# Models that require a reference translation. Kept in sync with
+# REFERENCE_REQUIRED_MODELS in src/config/constants.ts. Exact match
+# (case-insensitive) — substring matching is too lax and would catch
+# future variants like "Unbabel/wmt22-comet-da-v2-experimental".
+REFERENCE_REQUIRED_MODELS = (
+    "unbabel/wmt22-comet-da",
+    "unbabel/wmt21-comet-da",
+    "unbabel/wmt20-comet-da",
+)
+
+
 def model_requires_reference(model_name: str) -> bool:
-    ref_required = ["wmt22-comet-da", "wmt21-comet-da", "wmt20-comet-da"]
-    return any(r in model_name.lower() for r in ref_required)
+    return model_name.lower() in REFERENCE_REQUIRED_MODELS
+
+
+def _num_workers() -> int:
+    """Number of DataLoader workers for `model.predict()`.
+
+    Defaults to 1 for backward compatibility. Override with
+    `XCOMET_NUM_WORKERS` to tune throughput on machines with idle CPU
+    cores (especially relevant for large batches on GPU). Invalid values
+    silently fall back to 1.
+    """
+    raw = os.environ.get("XCOMET_NUM_WORKERS", "1")
+    try:
+        n = int(raw)
+        return n if n >= 1 else 1
+    except ValueError:
+        return 1
+
+
+# -----------------------------------------------------------------------------
+# Parameter helpers
+# -----------------------------------------------------------------------------
+
+def _require(params: Dict[str, Any], key: str) -> Any:
+    """Return params[key] or raise a friendly ValueError if missing/empty."""
+    if key not in params:
+        raise ValueError(f'missing required parameter: "{key}"')
+    value = params[key]
+    if value is None or value == "":
+        raise ValueError(f'parameter "{key}" must not be empty')
+    return value
 
 
 # -----------------------------------------------------------------------------
@@ -104,7 +157,7 @@ def _evaluate_internal(source: str, translation: str, reference: Optional[str], 
 
     gpus = 1 if use_gpu else 0
     inference_start = time.time()
-    output = model.predict(data, batch_size=1, gpus=gpus, num_workers=1)
+    output = model.predict(data, batch_size=1, gpus=gpus, num_workers=_num_workers())
     inference_time = round((time.time() - inference_start) * 1000)
 
     score = float(output.scores[0])
@@ -143,30 +196,32 @@ def _evaluate_internal(source: str, translation: str, reference: Optional[str], 
 # -----------------------------------------------------------------------------
 
 def handle_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
-    global _stats
     result, inference_time = _evaluate_internal(
-        params["source"],
-        params["translation"],
+        _require(params, "source"),
+        _require(params, "translation"),
         params.get("reference"),
         params.get("use_gpu", False),
     )
-    _stats["evaluate_rpc_count"] += 1
-    _stats["total_pairs_evaluated"] += 1
-    _stats["total_inference_time_ms"] += inference_time
+    _bump_stats(
+        evaluate_rpc_count=1,
+        total_pairs_evaluated=1,
+        total_inference_time_ms=inference_time,
+    )
     return result
 
 
 def handle_detect_errors(params: Dict[str, Any]) -> Dict[str, Any]:
-    global _stats
     eval_result, inference_time = _evaluate_internal(
-        params["source"],
-        params["translation"],
+        _require(params, "source"),
+        _require(params, "translation"),
         params.get("reference"),
         params.get("use_gpu", False),
     )
-    _stats["detect_errors_rpc_count"] += 1
-    _stats["total_pairs_evaluated"] += 1
-    _stats["total_inference_time_ms"] += inference_time
+    _bump_stats(
+        detect_errors_rpc_count=1,
+        total_pairs_evaluated=1,
+        total_inference_time_ms=inference_time,
+    )
 
     severity_order = {"minor": 0, "major": 1, "critical": 2}
     min_severity = params.get("min_severity", "minor")
@@ -189,7 +244,6 @@ def handle_detect_errors(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_batch_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
-    global _stats
     pairs = params.get("pairs", [])
     batch_size = params.get("batch_size", 8)
     use_gpu = params.get("use_gpu", False)
@@ -213,8 +267,14 @@ def handle_batch_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
                 f'{missing_ref_count} pairs are missing reference.'
             )
 
+    # Validate per-pair required fields up front, before model.predict() —
+    # otherwise a missing key surfaces as an opaque KeyError.
     data = []
-    for pair in pairs:
+    for i, pair in enumerate(pairs):
+        if "source" not in pair or pair.get("source") in (None, ""):
+            raise ValueError(f'pairs[{i}]: missing required field "source"')
+        if "translation" not in pair or pair.get("translation") in (None, ""):
+            raise ValueError(f'pairs[{i}]: missing required field "translation"')
         item = {"src": pair["source"], "mt": pair["translation"]}
         if pair.get("reference"):
             item["ref"] = pair["reference"]
@@ -222,12 +282,14 @@ def handle_batch_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
 
     gpus = 1 if use_gpu else 0
     inference_start = time.time()
-    output = model.predict(data, batch_size=batch_size, gpus=gpus, num_workers=1)
+    output = model.predict(data, batch_size=batch_size, gpus=gpus, num_workers=_num_workers())
     inference_time = round((time.time() - inference_start) * 1000)
 
-    _stats["batch_rpc_count"] += 1
-    _stats["total_pairs_evaluated"] += len(pairs)
-    _stats["total_inference_time_ms"] += inference_time
+    _bump_stats(
+        batch_rpc_count=1,
+        total_pairs_evaluated=len(pairs),
+        total_inference_time_ms=inference_time,
+    )
 
     results = []
     for i, score in enumerate(output.scores):

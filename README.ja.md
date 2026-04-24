@@ -80,7 +80,7 @@ python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')
 
 ### Node.js
 
-- Node.js >= 18.0.0
+- Node.js >= 22.0.0（`package.json` の `engines.node` と一致。CI は 22 と 24 で実行）
 - npm または yarn
 
 ## インストール
@@ -314,6 +314,7 @@ Claude への指示例：
 | `XCOMET_PYTHON_PATH` | （自動検出） | Python 実行ファイルのパス（下記参照） |
 | `XCOMET_PRELOAD` | `false` | 起動時にモデルをプリロード（v0.3.1+） |
 | `XCOMET_DEBUG` | `false` | 詳細デバッグログを有効化（v0.3.1+） |
+| `XCOMET_NUM_WORKERS` | `1` | `model.predict()` 用 DataLoader ワーカー数（v0.6.0+）。大きなバッチで GPU を回す際、CPU コアに余裕があれば増やすとスループットが改善。不正な値は `1` にフォールバック。 |
 
 ### モデル選択
 

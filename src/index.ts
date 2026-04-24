@@ -5,6 +5,7 @@ import { registerTools } from "./tools/index.js";
 import { shutdownServer } from "./services/xcomet.js";
 import { SERVER_NAME, SERVER_VERSION } from "./config/constants.js";
 import { LogMessages } from "./config/errors.js";
+import { logger } from "./utils/logger.js";
 
 /**
  * Create and configure the MCP server
@@ -30,21 +31,21 @@ async function runStdio(): Promise<void> {
 
   await server.connect(transport);
 
-  // Log to stderr to avoid interfering with stdio communication
-  console.error(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
+  // Log to stderr (via logger) to avoid interfering with stdio communication
+  logger.info(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
 }
 
 /**
  * Graceful shutdown handler
  */
 async function gracefulShutdown(signal: string): Promise<void> {
-  console.error(LogMessages.shutdownSignal(signal));
+  logger.info(LogMessages.shutdownSignal(signal));
   try {
     await shutdownServer();
-    console.error(LogMessages.shutdownComplete);
+    logger.info(LogMessages.shutdownComplete);
     process.exit(0);
   } catch (error) {
-    console.error(LogMessages.shutdownError(error));
+    logger.error(LogMessages.shutdownError(error));
     process.exit(1);
   }
 }
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
   try {
     await runStdio();
   } catch (error) {
-    console.error("Server error:", error);
+    logger.error(`Server error: ${error instanceof Error ? error.message : String(error)}`);
     await shutdownServer();
     process.exit(1);
   }
