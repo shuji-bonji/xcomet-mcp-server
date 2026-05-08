@@ -1,11 +1,11 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
