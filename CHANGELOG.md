@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-14
+
+### Added
+
+- **`.claude-plugin/plugin.json`** — Claude Code plugin マニフェストを追加。Claude Code の plugin marketplace 経由でインストールでき、`mcpServers.xcomet` (npx `xcomet-mcp-server@latest`) が自動設定される。利用には従来どおり `XCOMET_PYTHON_PATH` の指定が必要。
+
 ## [0.6.1] - 2026-05-09
 
 ### Build

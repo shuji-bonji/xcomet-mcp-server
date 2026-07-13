@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/.claude-plugin/plugin.schema.json",
+  "name": "xcomet-mcp",
+  "version": "0.6.2",
+  "description": "xCOMET による翻訳品質評価 MCP server。参照訳なしで翻訳をスコアリングし、エラースパンを検出。ローカル Python 環境 (XCOMET_PYTHON_PATH) が必要。",
+  "author": {
+    "name": "shuji-bonji",
+    "email": "bonji@mikuro.jp",
+    "url": "https://github.com/shuji-bonji"
+  },
+  "homepage": "https://github.com/shuji-bonji/xcomet-mcp-server",
+  "repository": "https://github.com/shuji-bonji/xcomet-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "translation",
+    "quality-estimation",
+    "xcomet",
+    "comet",
+    "mt-evaluation",
+    "mcp",
+    "mcp-server"
+  ],
+  "mcpServers": {
+    "xcomet": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "xcomet-mcp-server@latest"
+      ],
+      "env": {
+        "XCOMET_PYTHON_PATH": "${XCOMET_PYTHON_PATH}"
+      }
+    }
+  }
+}
