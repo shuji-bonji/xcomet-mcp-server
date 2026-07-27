@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-27
+
+> plugin マニフェストのみの変更。npm パッケージ (`xcomet-mcp-server`) の実装は 0.6.2 から変わっていないため、`package.json` は 0.6.2 のまま据え置く。
+
+### Fixed
+
+- **`.claude-plugin/plugin.json`: `XCOMET_PYTHON_PATH` を必須扱いにしていた問題** — `"${XCOMET_PYTHON_PATH}"` はデフォルト値を持たない展開なので、変数が未設定のホストでは Claude Code が config 検証の段階で `Invalid MCP server config for "xcomet": Missing environment variables: XCOMET_PYTHON_PATH` を出し、server が起動できなかった。`"${XCOMET_PYTHON_PATH:-}"` に変更し、未設定なら空文字に展開されるようにした。`detectPythonPath()` は `if (envPath)` で判定しているため空文字は falsy となり、pyenv / venv / system Python の自動検出に正しくフォールバックする。README が以前から「auto-detection で省略可」と書いていた挙動に、マニフェスト側をようやく合わせた形。
+
+### Changed
+
+- **plugin description** — Python 環境が必須である点は変えず、`XCOMET_PYTHON_PATH` 自体は任意 (venv 利用時の明示指定用) であることが分かる文面に修正。
+
 ## [0.6.2] - 2026-07-14
 
 ### Added
