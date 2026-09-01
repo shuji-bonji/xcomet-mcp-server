@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-01
+
+### Changed
+
+- **MCP TypeScript SDK を v1 から v2 へ移行** — 依存を `@modelcontextprotocol/sdk@^1.22.0` から `@modelcontextprotocol/server@^2.0.0` に差し替えた。v1 の単一パッケージは v2 で `server` / `client` / `core` / HTTP アダプタ群に分割され、深いファイルパス (`@modelcontextprotocol/sdk/server/mcp.js`) は解決しなくなった。本 server は stdio 専用なので `@modelcontextprotocol/server` 1 つで足りる。npm パッケージの実行時依存は 2 個のまま。
+- **stdio の起動を `serveStdio(factory)` に変更** — `new StdioServerTransport()` + `server.connect(transport)` の手組みをやめ、v2 の入口である `serveStdio` に寄せた。`serveStdio` は transport とプロトコル世代の決定を持ち、接続ごとに factory から 1 インスタンスを固定する。返る `StdioServerHandle.close()` を `gracefulShutdown` の先頭に置き、transport を畳んでから Python ワーカーを止める順序にした。
+- **`zod` を `^3.23.8` から `^4.5.4` へ** — v2 は zod 3 を受け付けない。zod 3 のままでも `npm install` も `tsc` も通り、server は起動して接続まで成功するが、最初の `tools/list` が `fromJsonSchema()` を指すエラーを返す。型検査でもテストでも捕まらない経路のため、宣言レンジごと更新した。4.0–4.1 では SDK 内蔵 zod へのフォールバックが働き `.describe()` の説明文が JSON Schema から落ちるため、下限は 4.2.0 以上が必要。
+- **`inputSchema` / `outputSchema` をスキーマオブジェクト直渡しに** — v2 は Standard Schema オブジェクトを期待する (raw shape は `@deprecated` overload での受理のみ)。`EvaluateInputSchema.shape.source` のようにフィールドを 1 つずつ並べ直していた 6 箇所を、元のスキーマをそのまま渡す形に畳んだ。並びは元スキーマと完全に一致していたため、公開される JSON Schema に差分はない。
+- **ツールハンドラの引数注釈を削除** — v2 のハンドラは `(args, ctx)` を受ける。第 1 引数の型は `inputSchema` から推論されるため、`params: EvaluateInput` 等の明示注釈を外した。
+- **`python/requirements.txt` を `unbabel-comet>=2.2.7,<3.0` に** — 下限は現行リリース (2.2.7、2025-09-01) に合わせた。上限を付けたのは、本 server が `download_model()` / `load_from_checkpoint()` / `model.predict(batch_size=, gpus=, num_workers=, progress_bar=)` を直接呼んでおり、メジャー更新でこれらの引数が変わり得るため。`src/config/errors.ts` の案内文 (`pythonNotFound` / `missingDependencies`) と README も同じ範囲に揃え、Python 要件の表記を「3.8+」から「3.9-3.12」に直した。
+- **`model.predict()` に `progress_bar=False` を明示** — COMET の既定は `progress_bar=True` で、Lightning の TQDMProgressBar は `file=sys.stdout` を使う。COMET は `comet/models/predict_pbar.py` の `PredictProgressBar` でこれを stderr に差し替えているため現状は壊れていないが、Python ワーカーの stdout は JSON-RPC の通り道なので、この不変条件を COMET 側の上書きに預けるのをやめた。
+
+### Added
+
+- **`src/server.ts`** — `createServer()` を `src/index.ts` から切り出して export した。stdio の入口が `serveStdio` に渡す factory であると同時に、プロトコルテストが `createMcpHandler` 経由でプロセス内から叩く対象でもある。
+- **`tests/mcp-protocol.test.ts`** — 実物の `Client` を in-process で繋いで `tools/list` と `tools/call` を検証する 4 ケース。3 ツールが JSON Schema 付きで広告されること、`.describe()` の説明文が残ること、スキーマが拒否する引数がハンドラ到達前に `isError: true` で返ること、`outputSchema` を宣言したツールが `structuredContent` なしの `isError` 結果を返せること (`createErrorResponse` の経路) を見る。zod 変換の失敗は `tsc` にも既存テストにも映らないため、この 4 ケースが移行の合格基準を担う。
+- **`@modelcontextprotocol/client`** を devDependencies に追加 (上記テスト用。実行時依存ではない)。
+- **`XCOMET_SAVING_DIRECTORY`** — チェックポイントのダウンロード先。`snapshot_download(cache_dir=)` と `download_model(saving_directory=)` に渡る。未設定なら huggingface_hub のキャッシュ (`HF_HOME`、既定 `~/.cache/huggingface`)。XCOMET-XL は 13.94GB、XCOMET-XXL は 42.87GB あるため、別ボリュームに置きたい場合に使う。
+- **`XCOMET_LOCAL_FILES_ONLY`** — `true` でローカルキャッシュのみから解決する。ネットワークなしで起動できる。
+- **README に `HF_TOKEN` での認証を追記** — huggingface_hub は `HF_TOKEN` (次点で `HUGGING_FACE_HUB_TOKEN`) を先に読み、無ければトークンファイルを読む。MCP ホストの `env` に置けるため、CLI ログインを実行していない環境からサーバーが起動される場合の手段になる。
+
+### Fixed
+
+- `postcss` 経由で入っていた `nanoid < 3.3.18` (GHSA-2v37-7h3g-55p8, high) を解消。
+- **モデル取得の失敗が原因を示すようになった** — `comet.download_model()` は `snapshot_download` の例外をすべて飲み込み、legacy 経路も失敗すると `KeyError: Model '<name>' not supported by COMET.` を投げる。ゲート付きモデルの利用規約未承諾、トークン未設定、ネットワーク断、ディスク不足のいずれもこの 1 文になり、利用者にはモデル名 (たいてい唯一正しい箇所) が疑わしく見えていた。`python/server.py` に `_download_checkpoint()` を追加し、`snapshot_download` を自分で呼んで `GatedRepoError` / `LocalEntryNotFoundError` / `ENOSPC` を原因ごとの案内に変換する。判別できない失敗は従来どおり `download_model()` に渡すので、Hub 以前のモデル名も引き続き解決できる。huggingface_hub 0.36 と 1.29 の両方で 4 経路を実測した。
+- **ダウンロードが途中で止まったキャッシュを検出するようにした** — `snapshot_download` はキャッシュに revision が 1 つでもあれば snapshot ディレクトリを返し、その中の全ファイルが揃っているかは見ない。403 でチェックポイントだけ取得できなかった場合、`checkpoints/model.ckpt` が無いパスがそのまま返り、`load_from_checkpoint` の `Invalid checkpoint path` になっていた。`_download_checkpoint()` が返す前にファイルの存在を確認し、該当ディレクトリの削除を促す。
+- **README の `huggingface-cli login` を `hf auth login` に** (英日 4 箇所) — huggingface_hub 0.34 で CLI が `hf` に置き換わり、`huggingface-cli` は `show_deprecation_warning` を通って「'huggingface-cli' is deprecated. Use 'hf' instead.」を出す。
+
+### Compatibility
+
+- MCP クライアントから見た挙動は変わらない。`serveStdio` は既定で 2025 世代のクライアントも同じ factory から serve する (`legacy: 'serve'`)。v2 クライアントとは 2026-07-28 世代 (`modern`)、Claude Desktop / Claude Code / Cursor の現行実装とは `legacy` で接続することを、`dist/index.js` を実際に spawn して両方で確認済み。
+- ツール名、入出力スキーマ、`annotations`、`structuredContent` / `isError` の形はいずれも変更なし。
+- Node.js 要件は `>=22.0.0` のまま (v2 の下限は 20)。
+- xCOMET モデル側に更新はない。`Unbabel/XCOMET-XL` / `XCOMET-XXL` はいずれも 2025-04-07 が最終更新で、これより新しい xCOMET は公開されていない。既定モデルは `Unbabel/XCOMET-XL` のまま。
+- torch 2.6 以降の `torch.load` は `weights_only=True` が既定で、COMET → Lightning の経路はこの既定をそのまま使う (`lightning_fabric/utilities/cloud_io.py`)。`Unbabel/XCOMET-XL` と `Unbabel/wmt22-comet-da` のチェックポイントが pickle で参照するクラスは `collections.OrderedDict` / `torch._utils._rebuild_tensor_v2` / `torch.LongStorage` / `torch.FloatStorage` の 4 つのみで、いずれも allowlist 内。torch 2.6 以降でも読める。
+
 ## [0.6.3] - 2026-07-27
 
 > plugin マニフェストのみの変更。npm パッケージ (`xcomet-mcp-server`) の実装は 0.6.2 から変わっていないため、`package.json` は 0.6.2 のまま据え置く。

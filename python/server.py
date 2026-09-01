@@ -16,6 +16,7 @@ import os
 import sys
 import json
 import time
+import errno
 import warnings
 import threading
 from typing import Any, Callable, Dict, Optional
@@ -68,6 +69,119 @@ def log(msg: str) -> None:
 # Model management
 # -----------------------------------------------------------------------------
 
+def _saving_directory() -> Optional[str]:
+    """Cache directory for the model checkpoint, or None for the default.
+
+    `XCOMET_SAVING_DIRECTORY` maps to `cache_dir` in `snapshot_download()`.
+    Unset, huggingface_hub uses its own cache (`HF_HOME`, default
+    `~/.cache/huggingface`).
+    """
+    raw = os.environ.get("XCOMET_SAVING_DIRECTORY", "").strip()
+    return os.path.expanduser(raw) if raw else None
+
+
+def _local_files_only() -> bool:
+    """Whether to resolve the checkpoint from the local cache only.
+
+    Set `XCOMET_LOCAL_FILES_ONLY=true` to start without network access. The
+    model must already be in the cache; otherwise loading raises with the
+    message below instead of reaching out to the Hub.
+    """
+    return os.environ.get("XCOMET_LOCAL_FILES_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
+def _download_checkpoint(model_name: str) -> str:
+    """Return the path of `model_name`'s checkpoint, downloading it if needed.
+
+    `comet.download_model()` wraps every failure in one message:
+
+        KeyError: Model '<name>' not supported by COMET.
+
+    A 401 from a gated repo, an unaccepted license, no network and a full disk
+    all arrive as that sentence, which points at the model name — the one thing
+    that is usually correct. So `snapshot_download` is called here directly and
+    its own exception is translated into a message that names the actual cause.
+    `comet.download_model()` still runs as the fallback, because it also knows
+    the pre-Hub location of the older model names.
+    """
+    from huggingface_hub import snapshot_download
+
+    try:
+        from huggingface_hub.errors import GatedRepoError, LocalEntryNotFoundError
+    except ImportError:  # huggingface_hub < 0.25
+        from huggingface_hub.utils import GatedRepoError, LocalEntryNotFoundError
+
+    saving_directory = _saving_directory()
+    local_files_only = _local_files_only()
+
+    try:
+        model_path = snapshot_download(
+            repo_id=model_name,
+            cache_dir=saving_directory,
+            local_files_only=local_files_only,
+        )
+    except GatedRepoError as exc:
+        raise RuntimeError(
+            f'Access to "{model_name}" was refused (HTTP 403). It is a gated model: '
+            f"open https://huggingface.co/{model_name} while signed in and accept the "
+            "license, then retry."
+        ) from exc
+    except LocalEntryNotFoundError as exc:
+        if local_files_only:
+            raise RuntimeError(
+                f'XCOMET_LOCAL_FILES_ONLY is set and "{model_name}" is not in the local '
+                "cache. Download it once with network access, or unset the variable."
+            ) from exc
+        raise RuntimeError(
+            f'Could not reach huggingface.co to download "{model_name}", and it is not '
+            "in the local cache. Check network access, or set XCOMET_LOCAL_FILES_ONLY=true "
+            "once the model has been downloaded."
+        ) from exc
+    except Exception as exc:
+        # One clause, not `except OSError` plus `except Exception`: every
+        # huggingface_hub HTTP error derives from requests.RequestException,
+        # which derives from OSError, so an `except OSError` placed first also
+        # swallows 401/404 and hides them from the fallback below.
+        if getattr(exc, "errno", None) == errno.ENOSPC:
+            raise RuntimeError(
+                f'No space left while downloading "{model_name}". XCOMET-XL needs about '
+                "14GB and XCOMET-XXL about 43GB. Free space, or point "
+                "XCOMET_SAVING_DIRECTORY at a larger volume."
+            ) from exc
+
+        # Repository missing, or authentication refused (a gated repo answers 401
+        # rather than 403 when no token is sent). download_model() also resolves
+        # the pre-Hub model names, so give it a turn before reporting.
+        try:
+            from comet import download_model
+
+            return download_model(
+                model_name,
+                saving_directory=saving_directory,
+                local_files_only=local_files_only,
+            )
+        except Exception:
+            raise RuntimeError(
+                f'Could not download "{model_name}": {type(exc).__name__}: {exc}. '
+                "If it is a gated model (XCOMET-XL, XCOMET-XXL, the CometKiwi models), "
+                "accept the license on its Hugging Face page and authenticate with "
+                "`hf auth login` or by setting HF_TOKEN."
+            ) from exc
+
+    checkpoint = os.path.join(model_path, "checkpoints", "model.ckpt")
+    if not os.path.isfile(checkpoint):
+        # snapshot_download() returns the snapshot directory as soon as a cached
+        # revision exists; it does not check that every file in it was fetched.
+        # An interrupted download, or one that failed on the checkpoint alone,
+        # leaves a directory that resolves but has no model.ckpt in it.
+        raise RuntimeError(
+            f'The cached snapshot of "{model_name}" has no checkpoints/model.ckpt '
+            f"({checkpoint}). The download was interrupted or refused partway. "
+            f"Delete that directory and download the model again."
+        )
+    return checkpoint
+
+
 def get_model():
     """Lazy-load the model on first request. Thread-safe."""
     global _model, _model_name, _stats
@@ -83,9 +197,9 @@ def get_model():
         log(f"Loading model: {model_name}")
 
         load_start = time.time()
-        from comet import download_model, load_from_checkpoint
-        model_path = download_model(model_name)
-        _model = load_from_checkpoint(model_path)
+        from comet import load_from_checkpoint
+        model_path = _download_checkpoint(model_name)
+        _model = load_from_checkpoint(model_path, local_files_only=_local_files_only())
         _model_name = model_name
         _stats["model_load_time"] = round((time.time() - load_start) * 1000)
 
@@ -157,7 +271,9 @@ def _evaluate_internal(source: str, translation: str, reference: Optional[str], 
 
     gpus = 1 if use_gpu else 0
     inference_start = time.time()
-    output = model.predict(data, batch_size=1, gpus=gpus, num_workers=_num_workers())
+    output = model.predict(
+        data, batch_size=1, gpus=gpus, num_workers=_num_workers(), progress_bar=False
+    )
     inference_time = round((time.time() - inference_start) * 1000)
 
     score = float(output.scores[0])
@@ -282,7 +398,9 @@ def handle_batch_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
 
     gpus = 1 if use_gpu else 0
     inference_start = time.time()
-    output = model.predict(data, batch_size=batch_size, gpus=gpus, num_workers=_num_workers())
+    output = model.predict(
+        data, batch_size=batch_size, gpus=gpus, num_workers=_num_workers(), progress_bar=False
+    )
     inference_time = round((time.time() - inference_start) * 1000)
 
     _bump_stats(

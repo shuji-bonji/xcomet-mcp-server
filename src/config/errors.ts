@@ -53,15 +53,15 @@ export const XCometServiceErrors = {
 export const AvailabilityErrors = {
   /** Python not found */
   pythonNotFound: (pythonPath: string) =>
-    `Python not found at "${pythonPath}". Please install Python 3.8+ and dependencies:\n` +
+    `Python not found at "${pythonPath}". Please install Python 3.9-3.12 and dependencies:\n` +
     `  1. Install Python: https://www.python.org/downloads/\n` +
-    `  2. Install xCOMET: pip install 'unbabel-comet>=2.2.0'\n` +
+    `  2. Install xCOMET: pip install 'unbabel-comet>=2.2.7,<3.0'\n` +
     `  3. Set XCOMET_PYTHON_PATH if using pyenv/venv`,
 
   /** Missing Python dependencies */
   missingDependencies: (pythonPath: string) =>
     `Missing Python dependencies. Run:\n` +
-    `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.0'`,
+    `  ${pythonPath} -m pip install 'unbabel-comet>=2.2.7,<3.0'`,
 
   /** General Python server failure */
   serverFailed: (errorMessage: string, pythonPath: string) =>

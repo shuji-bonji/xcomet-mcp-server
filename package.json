@@ -1,6 +1,6 @@
 {
   "name": "xcomet-mcp-server",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "MCP Server for xCOMET translation quality evaluation",
   "type": "module",
   "main": "dist/index.js",
@@ -37,11 +37,12 @@
     "url": "https://github.com/shuji-bonji/xcomet-mcp-server.git"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.22.0",
-    "zod": "^3.23.8"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@types/node": "^22.10.0",
     "eslint": "^9.39.4",
     "typescript": "^5.7.0",

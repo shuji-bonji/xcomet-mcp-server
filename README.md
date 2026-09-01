@@ -44,13 +44,17 @@ xCOMET requires Python with several packages. We recommend using a virtual envir
 # If using uv (recommended - auto-downloads the correct Python version)
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0"
+uv pip install "unbabel-comet>=2.2.7,<3.0"
 
 # Or using standard venv (requires Python 3.9-3.12 already installed)
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.7,<3.0"
 ```
+
+> **Why Python 3.9-3.12?** `unbabel-comet` declares `numpy = "^1.20.0"`, so it
+> resolves numpy 1.x. The last numpy 1.x release, 1.26.4, ships wheels for
+> cp39-cp312 only. On Python 3.13 or later, pip has to build numpy from source.
 
 > **Note (v0.5.0+)**: The Python worker now talks to Node.js over stdin/stdout
 > (line-delimited JSON-RPC). FastAPI, uvicorn, and pydantic are no longer
@@ -63,11 +67,25 @@ pip install "unbabel-comet>=2.2.0"
 > **Important**: XCOMET-XL and XCOMET-XXL are **gated models** on HuggingFace. You must:
 > 1. Create a [HuggingFace](https://huggingface.co/) account
 > 2. Visit [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) and request access
-> 3. Login via CLI:
+> 3. Authenticate, either via the CLI:
 >    ```bash
 >    source ~/.xcomet-venv/bin/activate
->    huggingface-cli login
+>    hf auth login
 >    ```
+>    (`huggingface-cli login` still works but prints a deprecation warning since
+>    huggingface_hub 0.34; `hf` is the current command.)
+>
+>    Or by setting `HF_TOKEN` in the MCP host's `env` block, which is the option
+>    when the host launches the server in an environment where no CLI login has
+>    been performed:
+>    ```json
+>    "env": {
+>      "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3",
+>      "HF_TOKEN": "hf_..."
+>    }
+>    ```
+>    huggingface_hub reads `HF_TOKEN` first and falls back to the token file
+>    written by `hf auth login`.
 >
 > `Unbabel/wmt22-comet-da` does **not** require authentication (but requires reference translations).
 
@@ -315,6 +333,9 @@ Then ask Claude:
 | `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
 | `XCOMET_DEBUG` | `false` | Enable verbose debug logging (v0.3.1+) |
 | `XCOMET_NUM_WORKERS` | `1` | DataLoader workers for `model.predict()` (v0.6.0+). Increase to better utilize idle CPU cores when running large batches, especially on GPU. Invalid values silently fall back to `1`. |
+| `XCOMET_SAVING_DIRECTORY` | (HuggingFace cache) | Directory to download the checkpoint into (v0.7.0+). Unset, the model goes to the huggingface_hub cache (`HF_HOME`, default `~/.cache/huggingface`). Set this to put a 14GB (XL) or 43GB (XXL) checkpoint on another volume. |
+| `XCOMET_LOCAL_FILES_ONLY` | `false` | Resolve the checkpoint from the local cache only (v0.7.0+). Set to `true` to start with no network access; the model must already be downloaded. |
+| `HF_TOKEN` | (unset) | HuggingFace access token, read by huggingface_hub. An alternative to `hf auth login` for the gated models (XCOMET-XL, XCOMET-XXL, the CometKiwi models). |
 
 ### Model Selection
 
@@ -510,12 +531,16 @@ export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 
 **Solution**:
 ```bash
-# Login to HuggingFace (required for XCOMET-XL/XXL)
-huggingface-cli login
+# Authenticate with HuggingFace (required for XCOMET-XL/XXL)
+hf auth login          # or: export HF_TOKEN=hf_...
 
 # Pre-download the model manually
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+If the download was interrupted, the cache keeps a snapshot directory with no
+`checkpoints/model.ckpt` in it. The server reports that path and asks you to
+delete the directory; `hf cache scan` lists where it is.
 
 #### GPU not detected
 

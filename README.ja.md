@@ -44,13 +44,18 @@ xCOMET には複数の Python パッケージが必要です。仮想環境（ve
 # uv を使う場合（推奨 — 適切な Python バージョンを自動ダウンロード）
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0"
+uv pip install "unbabel-comet>=2.2.7,<3.0"
 
 # 標準の venv を使う場合（Python 3.9-3.12 が既にインストールされている必要あり）
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.7,<3.0"
 ```
+
+> **なぜ Python 3.9-3.12 なのか**: `unbabel-comet` は `numpy = "^1.20.0"` を
+> 宣言しているため numpy 1.x が入ります。numpy 1.x の最終版 1.26.4 の wheel は
+> cp39-cp312 しかありません。Python 3.13 以降では pip が numpy を
+> ソースからビルドすることになります。
 
 > **Note (v0.5.0+)**: Python ワーカーは Node.js と stdin/stdout 上の
 > 行区切り JSON-RPC で通信します。FastAPI / uvicorn / pydantic は
@@ -63,11 +68,24 @@ pip install "unbabel-comet>=2.2.0"
 > **重要**: XCOMET-XL と XCOMET-XXL は HuggingFace の**ゲート付きモデル**です。以下の手順が必要です：
 > 1. [HuggingFace](https://huggingface.co/) アカウントを作成
 > 2. [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) にアクセスし、利用をリクエスト
-> 3. CLI でログイン：
+> 3. 認証する。CLI でログインするか：
 >    ```bash
 >    source ~/.xcomet-venv/bin/activate
->    huggingface-cli login
+>    hf auth login
 >    ```
+>    （`huggingface-cli login` も動きますが、huggingface_hub 0.34 以降は
+>    deprecation warning を出します。現行のコマンドは `hf` です。）
+>
+>    または MCP ホストの `env` に `HF_TOKEN` を設定します。ホストが CLI ログインを
+>    していない環境でサーバーを起動する場合はこちらになります：
+>    ```json
+>    "env": {
+>      "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3",
+>      "HF_TOKEN": "hf_..."
+>    }
+>    ```
+>    huggingface_hub は `HF_TOKEN` を先に読み、無ければ `hf auth login` が
+>    書いたトークンファイルを読みます。
 >
 > `Unbabel/wmt22-comet-da` は認証**不要**です（ただし参照訳が必須）。
 
@@ -315,6 +333,9 @@ Claude への指示例：
 | `XCOMET_PRELOAD` | `false` | 起動時にモデルをプリロード（v0.3.1+） |
 | `XCOMET_DEBUG` | `false` | 詳細デバッグログを有効化（v0.3.1+） |
 | `XCOMET_NUM_WORKERS` | `1` | `model.predict()` 用 DataLoader ワーカー数（v0.6.0+）。大きなバッチで GPU を回す際、CPU コアに余裕があれば増やすとスループットが改善。不正な値は `1` にフォールバック。 |
+| `XCOMET_SAVING_DIRECTORY` | （HuggingFace のキャッシュ） | チェックポイントのダウンロード先ディレクトリ（v0.7.0+）。未設定なら huggingface_hub のキャッシュ（`HF_HOME`、既定は `~/.cache/huggingface`）に入ります。XL は 14GB、XXL は 43GB あるので、別ボリュームに置きたい場合に指定します。 |
+| `XCOMET_LOCAL_FILES_ONLY` | `false` | チェックポイントをローカルキャッシュからのみ解決する（v0.7.0+）。`true` にするとネットワークなしで起動します。モデルがダウンロード済みである必要があります。 |
+| `HF_TOKEN` | （未設定） | huggingface_hub が読む HuggingFace のアクセストークン。ゲート付きモデル（XCOMET-XL、XCOMET-XXL、CometKiwi 系）に対して `hf auth login` の代わりに使えます。 |
 
 ### モデル選択
 
@@ -509,12 +530,16 @@ export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 
 **解決策**:
 ```bash
-# HuggingFace にログイン（XCOMET-XL/XXL に必要）
-huggingface-cli login
+# HuggingFace で認証（XCOMET-XL/XXL に必要）
+hf auth login          # または: export HF_TOKEN=hf_...
 
 # モデルを手動で事前ダウンロード
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+ダウンロードが途中で止まった場合、キャッシュには `checkpoints/model.ckpt` を
+含まない snapshot ディレクトリが残ります。サーバーはそのパスを示して削除を促します。
+場所は `hf cache scan` で確認できます。
 
 #### GPU が検出されない
 
