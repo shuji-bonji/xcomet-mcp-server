@@ -54,7 +54,7 @@ graph TD
 
 ## v0.5.0 で何が変わったか
 
-v0.4.x までは Python サーバが FastAPI/uvicorn でローカル HTTP リスナーを立て、Node 側が `fetch()` で叩く構成でした。v0.5.0 で **stdio + 行区切り JSON-RPC** に切り替わったため、テスト群も以下の通り更新されています。
+v0.4.x までは Python サーバが FastAPI/uvicorn でローカル HTTP リスナーを立て、Node 側が `fetch()` で叩く構成でした。v0.5.0 で **stdio + 行区切り JSON-RPC** に切り替わったため、テスト群も次のとおり更新されています。
 
 ```mermaid
 flowchart LR
@@ -99,10 +99,10 @@ sequenceDiagram
 
 | テスト名 | 説明 |
 |---------|------|
-| `parses a ready message delivered in one chunk` | 単一チャンクの `ready` 信号 |
+| `parses a ready message delivered in one chunk` | 単一チャンクで届く `ready` メッセージ |
 | `handles a ready message split across multiple chunks` | チャンク分割された `ready` |
-| `delivers multiple response messages from a single chunk` | 1 チャンクに複数レスポンス |
-| `interleaves ready and response messages in order` | `ready` とレスポンスの順序保持 |
+| `delivers multiple response messages from a single chunk` | 1 チャンクに複数の応答 |
+| `interleaves ready and response messages in order` | `ready` と応答の順序保持 |
 | `keeps a partial trailing line in the buffer` | 末尾の部分行をバッファに残す |
 | `handles an empty chunk between messages` | 空チャンクの安全な処理 |
 | `handles Windows-style line endings` | CRLF 改行 |
@@ -115,7 +115,7 @@ sequenceDiagram
 
 ### 問題の背景
 
-HTTP 時代の旧バグ：`stop()` が `request("/shutdown")` を呼び、`request()` が auto-start を経由して新しいプロセスを生んでいました。stdio 化後の現在は EOF + SIGTERM + SIGKILL fallback で停止しますが、**「stop は start を絶対に呼ばない」というインバリアントは引き続き守る必要がある** ため、バグった実装と正しい実装を対比して固定しています。
+HTTP 時代の旧バグ：`stop()` が `request("/shutdown")` を呼び、`request()` が auto-start を経由して新しいプロセスを生んでいました。stdio 化後の現在は EOF + SIGTERM + SIGKILL fallback で停止しますが、**「stop は start を絶対に呼ばない」というインバリアントは引き続き成り立たせる必要がある** ため、バグった実装と正しい実装を対比して固定しています。
 
 ```mermaid
 sequenceDiagram
@@ -282,7 +282,7 @@ graph TD
 
 `describe.skipIf(!hasPythonDeps)` 経由で Python 不在環境では自動スキップされますが、Python ありの環境ではすべて実行されます。`it.skip` での恒久スキップは現在ありません（v0.5.x 以降）。
 
-> **Note**: 以前あった `should handle empty strings gracefully` は v0.5.x の Python 側 `_require()` ヘルパ追加に伴い、`should reject empty strings with a clear error` として通常テストへ復帰しています。  
+> **注記**: 以前あった `should handle empty strings gracefully` は v0.5.x の Python 側 `_require()` ヘルパ追加に伴い、`should reject empty strings with a clear error` として通常テストへ復帰しています。  
 > `should handle very long text (1000+ characters)` は CPU 上で推論時間が読めないため、`tests/stress/long-text.stress.test.ts` に分離して `npm run test:stress` でのみ実行する設計になっています。
 
 ---
@@ -293,7 +293,7 @@ graph TD
 
 `src/server.ts` の `createServer()` に対して、**本物の `Client` をプロセス内で繋いで** `tools/list` と `tools/call` を叩きます。`createMcpHandler` が返す `handler.fetch` を `StreamableHTTPClientTransport` の `fetch` オプションに渡すだけで、ポートもソケットもモックの transport も要りません。
 
-このテストが守っているのは、**型検査にもユニットテストにも映らない失敗経路**です。SDK v2 は Zod スキーマを JSON Schema に変換して広告しますが、変換に失敗しても登録時には何も起きません。サーバーは起動し、接続も成功し、最初の `tools/list` だけがエラーを返します（v0.7.0 の zod 4 移行で、宣言レンジが zod 3 のままだとこれが起きます）。
+このテストの対象は、**型検査でもユニットテストでも検出できない失敗**です。SDK v2 は Zod スキーマを JSON Schema に変換して `tools/list` の応答に載せますが、変換に失敗しても登録時には何も起きません。サーバーは起動し、接続も成功し、最初の `tools/list` だけがエラーを返します（v0.7.0 の zod 4 移行で、宣言レンジが zod 3 のままだとこうなります）。
 
 ```mermaid
 flowchart LR
@@ -308,8 +308,8 @@ flowchart LR
 
 | テスト名 | 説明 |
 |---------|------|
-| `advertises all three tools with converted JSON Schemas` | 3 ツールが `inputSchema` / `outputSchema` 付きで広告される |
-| `keeps .describe() text in the advertised input schema` | `.describe()` の説明文が JSON Schema に残る（zod 4.2 未満だと落ちる） |
+| `advertises all three tools with converted JSON Schemas` | `tools/list` が 3 ツールを `inputSchema` / `outputSchema` 付きで返す |
+| `keeps .describe() text in the advertised input schema` | `.describe()` の説明文が JSON Schema に残る（zod 4.2 未満だと消える） |
 | `rejects arguments the schema refuses before the handler runs` | スキーマ違反が `isError: true` で返り、ハンドラに到達しない |
 | `accepts an isError result with no structuredContent on a tool that declares outputSchema` | `createErrorResponse` の経路が v2 で通ることの確認 |
 
@@ -319,7 +319,7 @@ flowchart LR
 
 ### 設計意図
 
-MCP SDK は `structuredContent` を `outputSchema` で検証してから返します。**Python ワーカーが送るフィールドがスキーマと 1 つでも食い違うと、ツール呼び出しそのものが失敗します**。Node 側のユニットテストは Python の出力を知らず、Python 側のテストはスキーマを知らないため、この境界はどちらからも見えません。
+MCP SDK は `structuredContent` を `outputSchema` で検証してから返します。**Python ワーカーが送るフィールドがスキーマと 1 つでも食い違うと、ツール呼び出しそのものが失敗します**。Node 側のユニットテストは Python の出力を知らず、Python 側のテストはスキーマを知らないため、この境界はどちらのテストの対象にもなりません。
 
 v0.7.0 で実際に踏んだのがこれでした。`handle_detect_errors` が全エラーに `suggestion: None` を差し込む一方、スキーマは `z.string().optional()` を宣言していました。zod の `.optional()` が受けるのは `undefined` であって `null` ではないため、エラーが 1 件でもある `xcomet_detect_errors` はすべて失敗します。エラースパンが常に空だったせいで 4 リリース発火しませんでした。
 
@@ -351,7 +351,7 @@ flowchart LR
 
 ### 設計意図
 
-`python/server.py` のうち、**COMET の予測構造体を読み解く部分**を検証します。ここを間違えると壊れ方が静かです。サーバーは応答し続け、スコアも正しく、エラースパンだけが消えます。Node 側の統合テストからは正常な応答にしか見えません。実際に v0.3.4 から 0.6.3 まで、`output.metadata[0]` の誤りでスパンが常に空でした。
+`python/server.py` のうち、**COMET の予測構造体を読み解く部分**を検証します。ここを間違えても、目に見える失敗にはなりません。サーバーは応答し続け、スコアも正しく、エラースパンだけが空になります。Node 側の統合テストは、正常な応答として受け取ります。実際に v0.3.4 から 0.6.3 まで、`output.metadata[0]` の誤りでスパンが常に空でした。
 
 COMET の `Prediction` は自前の `ModelOutput`（旧 transformers のコピー、`comet/models/utils.py:23`）を継承していて、`__getitem__` は str 以外のキーで `to_tuple()[k]`、つまり値の側を引きます。
 
@@ -363,7 +363,7 @@ len(metadata)             # → 3。サンプル数ではなくキー数
 metadata["error_spans"]   # → サンプルごとのスパンのリスト（正しい引き方）
 ```
 
-テストはこの `ModelOutput` の挙動を写した最小クラスを用意して、`_error_spans` に通します。**pytest だけで動き、`comet` も torch もモデルも要りません。**
+テストはこの `ModelOutput` の挙動を写した最小クラスを用意して、`_error_spans` に通します。**pytest だけで実行でき、`comet` も torch もモデルも要りません。**
 
 ### テストケース
 
@@ -412,7 +412,7 @@ npx vitest run --coverage
 
 ### Python 側のユニットテスト
 
-Vitest とは別コマンドです。`comet` もモデルも不要で、**pytest だけ**あれば動きます。
+Vitest とは別コマンドです。`comet` もモデルも不要で、**pytest だけ**あれば実行できます。
 
 ```bash
 npm run test:python
@@ -445,7 +445,7 @@ python3 -m venv .venv-dev && .venv-dev/bin/pip install pytest
 
 ### Python 側（統合・E2E・golden テスト用）
 
-- Python 3.9 - 3.12（`unbabel-comet` が `numpy <2.0` を固定しており、numpy 1.x の
+- Python 3.9〜3.12（`unbabel-comet` が `numpy <2.0` を固定しており、numpy 1.x の
   最終版 1.26.4 の wheel が cp39-cp312 しかないため）
 - `unbabel-comet>=2.2.7,<3.0`
 
@@ -456,9 +456,9 @@ pip install "unbabel-comet>=2.2.7,<3.0"
 ### Python 側（`test_server.py` 用）
 
 - pytest のみ。`comet` も torch もモデルも不要で、実行は 0.03 秒程度です。
-- Python のバージョン制約もありません（3.9 以降であれば動きます）。
+- Python のバージョン制約もありません（3.9 以降であれば実行できます）。
 
-> **Note (v0.5.0+)**: Python ワーカーは stdio JSON-RPC で通信するため、
+> **注記（v0.5.0 以降）**: Python ワーカーは stdio JSON-RPC で通信するため、
 > FastAPI / uvicorn / pydantic は不要です。
 
 ---
