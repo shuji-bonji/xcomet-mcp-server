@@ -174,7 +174,7 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
       }
@@ -188,7 +188,7 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 ### With Claude Code
 
 ```bash
-claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server
+claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server@latest
 ```
 
 ### Global Installation
@@ -349,7 +349,7 @@ Configure both servers in Claude Desktop:
     },
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
       }
@@ -399,7 +399,7 @@ Choose the model based on your quality/performance needs:
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_MODEL": "Unbabel/XCOMET-XXL"
       }
@@ -425,7 +425,7 @@ This ensures the server works correctly even when the MCP host (e.g., Claude Des
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "/Users/you/.pyenv/versions/3.11.0/bin/python3"
       }
@@ -459,7 +459,7 @@ Enable `XCOMET_PRELOAD=true` to pre-load the model at server startup:
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PRELOAD": "true"
       }
@@ -658,6 +658,39 @@ uv pip install "unbabel-comet>=2.2.7,<3.0"
 Reinstalling the packages is a few hundred MB, but **the model is not
 re-downloaded**: the checkpoint lives in the huggingface_hub cache, not in the
 venv (see [Where the model is stored](#where-the-model-is-stored)).
+
+#### An old version starts after an upgrade
+
+**Symptom**: a fix you know is published is missing from the running server. The
+startup banner in the log names an older version.
+
+```bash
+grep "running on stdio" ~/Library/Logs/Claude/mcp-server-xcomet.log | tail -1
+xcomet-mcp-server v0.6.3 running on stdio
+```
+
+(On macOS, Claude Desktop writes each MCP server's stderr to
+`~/Library/Logs/Claude/mcp-server-<name>.log`.)
+
+**Cause**: `npx` resolves `latest` from npm's cached registry metadata, and runs
+the copy it already installed under `~/.npm/_npx`. For a while after a release,
+that copy is the previous version. It catches up on its own, but not at a time
+you choose. `@latest` does not change this — to npm it means the same as writing
+no version at all.
+
+**Solution**: clear the npx cache, then restart the MCP host.
+
+```bash
+rm -rf ~/.npm/_npx
+```
+
+`ps` shows which copy is running, and which cache directory it came from.
+
+```bash
+ps -axo pid,command | grep xcomet-mcp-server | grep -v grep
+```
+
+To stay on a known build, pin an exact version: `xcomet-mcp-server@0.7.0`.
 
 #### Model download fails or times out
 

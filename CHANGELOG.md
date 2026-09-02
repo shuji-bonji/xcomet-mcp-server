@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **README (英日) の npx 設定例に `@latest` を付けた** — `"args": ["-y", "xcomet-mcp-server@latest"]` と `claude mcp add ... -- npx -y xcomet-mcp-server@latest`、英日あわせて 12 箇所。`.claude-plugin/plugin.json` は元から `@latest` を指定しており、README だけが取り残されていた。挙動は変わらない (npm にとって `@latest` はバージョンを書かない場合と同じ意味) が、マニフェストと表記を揃えた。グローバルインストールの例 (`"command": "xcomet-mcp-server"`) は npx を経由しないため対象外。
+- **README (英日) のトラブルシューティングに「更新したのに古いバージョンが起動する」を追加** — 0.7.0 の publish から約 1 時間、`npx` 経由では 0.6.3 が起動し続けた。`npx` は `latest` を npm がキャッシュしたレジストリのメタデータから解決し、`~/.npm/_npx` に入れた実体をそのまま起動するため。放置しても追いつくが、追いつく時刻は選べない。症状 (ログの起動バナー)、原因、`ps` での確認方法、`rm -rf ~/.npm/_npx` での対処、バージョンを固定する場合の書き方を載せた。
 - **`CLAUDE.md` を設置** — Claude Code / Cowork から読まれる作業指針。日本語を書く前に `ja-writing-guide.md` を読むこと、日付は JST で書くこと、この repo の構成、触る前に知っておくこと (Python ワーカーの stdout は JSON-RPC の通り道、`num_workers` の下限 1、戻り値は `outputSchema` で検証される、zod 4.2 以上、モデルの重みは venv の中には入らない、`ModelOutput` の `__getitem__`)、コマンド、リリース手順をまとめた。
 - **`tests/README.md` と `CHANGELOG.md` を `ja-writing-guide.md` と照合** — 用語集の左列を置き換えた。「守っている」→「対象」、「レスポンス」→「応答」、「`ready` 信号」→「`ready` メッセージ」、「以下の通り」→「次のとおり」、「動きます」→「実行できます」、「広告する」→「`tools/list` の応答に載せる」、「壊れ方が静か」「見えない」→ 何が起きるかの記述、「ゲート付きモデル」→「gated model」、「フォールバック」→「A が無いときは B を使う」の形、`Note` ラベル →「注記」、範囲のハイフン → 波ダッシュ。0.6.3 以前のエントリは記録として残した。
 - **`tests/README.md` を現状に追従** — v0.7.0 で追加した `mcp-protocol.test.ts` / `output-schemas.test.ts` / `test_server.py` の節を追加し、各テストスイートの対象を書いた。ファイル一覧に実行コマンド列を追加し、`test_server.py` が `npm test` ではなく `npm run test:python` である点、CI が Vitest と pytest の 2 系統に分かれている点、`publish.yml` は `test:python` を含まない点を明記。前提条件の `unbabel-comet` を `>=2.2.7,<3.0` に、Python 3.9〜3.12 の根拠 (numpy の pin) を追記。

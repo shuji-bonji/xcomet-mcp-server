@@ -166,7 +166,7 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に追加�
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
       }
@@ -180,7 +180,7 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に追加�
 ### Claude Code での利用
 
 ```bash
-claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server
+claude mcp add xcomet --env XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3 -- npx -y xcomet-mcp-server@latest
 ```
 
 ### グローバルインストール
@@ -348,7 +348,7 @@ Claude Desktop で両方を設定する例です。
     },
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3"
       }
@@ -399,7 +399,7 @@ Claude への指示例:
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_MODEL": "Unbabel/XCOMET-XXL"
       }
@@ -426,7 +426,7 @@ MCP ホスト（例: Claude Desktop）がターミナルとは別の Python を�
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PYTHON_PATH": "/Users/you/.pyenv/versions/3.11.0/bin/python3"
       }
@@ -457,7 +457,7 @@ MCP ホスト（例: Claude Desktop）がターミナルとは別の Python を�
   "mcpServers": {
     "xcomet": {
       "command": "npx",
-      "args": ["-y", "xcomet-mcp-server"],
+      "args": ["-y", "xcomet-mcp-server@latest"],
       "env": {
         "XCOMET_PRELOAD": "true"
       }
@@ -628,6 +628,33 @@ uv pip install "unbabel-comet>=2.2.7,<3.0"
 ```
 
 パッケージの再インストールで数百 MB かかります。**モデルは再ダウンロードされません。** チェックポイントは venv ではなく huggingface_hub のキャッシュにあります（[モデルの格納位置](#モデルの格納位置) を参照）。
+
+#### 更新したのに古いバージョンが起動する
+
+**症状**: publish 済みのはずの修正が、動いているサーバーに入っていない。ログの起動バナーが古いバージョンを示す。
+
+```bash
+grep "running on stdio" ~/Library/Logs/Claude/mcp-server-xcomet.log | tail -1
+xcomet-mcp-server v0.6.3 running on stdio
+```
+
+macOS の Claude Desktop は、MCP サーバーの stderr を `~/Library/Logs/Claude/mcp-server-<名前>.log` に書きます。
+
+**原因**: `npx` は `latest` を、npm がキャッシュしたレジストリのメタデータから解決します。そして `~/.npm/_npx` に入れた実体をそのまま起動します。リリース直後のしばらくの間、この実体は 1 つ前のバージョンです。放っておけば追いつきますが、追いつく時刻は選べません。`@latest` を付けても変わりません。npm にとっては、バージョンを書かない場合と同じ意味です。
+
+**確認**: どの実体が起動しているか、どのキャッシュディレクトリから来たかは `ps` で分かります。
+
+```bash
+ps -axo pid,command | grep xcomet-mcp-server | grep -v grep
+```
+
+**対処**: npx のキャッシュを消してから、MCP ホストを再起動します。
+
+```bash
+rm -rf ~/.npm/_npx
+```
+
+バージョンを固定したい場合は `xcomet-mcp-server@0.7.0` のように厳密に指定します。
 
 #### モデルのダウンロードが失敗する、またはタイムアウトする
 
