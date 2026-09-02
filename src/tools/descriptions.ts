@@ -66,8 +66,7 @@ Returns:
         "text": string,
         "start": number,
         "end": number,
-        "severity": "minor" | "major" | "critical",
-        "suggestion": string | null
+        "severity": "minor" | "major" | "critical"
       }
     ]
   }

@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:stress": "vitest run --config vitest.stress.config.ts",
+    "test:python": "python3 -m pytest tests/test_server.py -q",
     "inspect": "npx @modelcontextprotocol/inspector",
     "prepublishOnly": "npm run clean && npm run build"
   },

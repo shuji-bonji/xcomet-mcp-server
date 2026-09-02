@@ -226,10 +226,22 @@ def model_requires_reference(model_name: str) -> bool:
 def _num_workers() -> int:
     """Number of DataLoader workers for `model.predict()`.
 
-    Defaults to 1 for backward compatibility. Override with
-    `XCOMET_NUM_WORKERS` to tune throughput on machines with idle CPU
-    cores (especially relevant for large batches on GPU). Invalid values
-    silently fall back to 1.
+    Defaults to 1. Override with `XCOMET_NUM_WORKERS` to tune throughput on
+    machines with idle CPU cores (especially relevant for large batches on
+    GPU). Invalid values, and anything below 1, fall back to 1.
+
+    The floor of 1 is not cosmetic on Apple Silicon. COMET builds its
+    DataLoader with `multiprocessing_context="fork" if
+    torch.backends.mps.is_available() else None`, and torch rejects a
+    multiprocessing context when `num_workers=0`:
+
+        ValueError: multiprocessing_context can only be used with
+        multi-process loading (num_workers > 0), but got num_workers=0
+
+    COMET's own default is `2 * gpus`, which is 0 for CPU inference, so
+    calling `predict()` on a Mac without passing `num_workers` raises. This
+    server always passes a value of at least 1, which is why CPU inference
+    works here.
     """
     raw = os.environ.get("XCOMET_NUM_WORKERS", "1")
     try:
@@ -251,6 +263,47 @@ def _require(params: Dict[str, Any], key: str) -> Any:
     if value is None or value == "":
         raise ValueError(f'parameter "{key}" must not be empty')
     return value
+
+
+def _error_spans(output, index: int) -> list:
+    """Error spans for sample `index` of a `model.predict()` result.
+
+    COMET's `Prediction` extends its own `ModelOutput` (a vendored copy of an
+    old transformers class, `comet/models/utils.py:23`), whose `__getitem__`
+    returns `to_tuple()[k]` for any key that is not a `str`.
+    `output.metadata[0]` therefore returns the first *value* of the metadata
+    dict — for XCOMET that is `src_scores`, a list of floats — and not
+    sample 0's entry. A following `"error_spans" in metadata` test then runs
+    against that list of floats and is always False, which is why every
+    result reported zero errors up to 0.6.3. `len(output.metadata)` is the
+    number of keys (3 for the reference-free branch, 5 with a reference),
+    not the number of samples, so bounding a batch loop with it was wrong
+    for the same reason.
+
+    The key has to be a string. `metadata["error_spans"]` is one list of
+    spans per sample, in the order the samples were passed in
+    (`predict()` restores the order after length batching).
+
+    Returns an empty list for models that emit no spans at all, such as the
+    regression metrics (`Unbabel/wmt22-comet-da`).
+    """
+    metadata = getattr(output, "metadata", None)
+    if not metadata or "error_spans" not in metadata:
+        return []
+
+    spans_by_sample = metadata["error_spans"]
+    if index >= len(spans_by_sample):
+        return []
+
+    return [
+        {
+            "text": span.get("text", ""),
+            "start": span.get("start", 0),
+            "end": span.get("end", 0),
+            "severity": span.get("severity", "minor"),
+        }
+        for span in (spans_by_sample[index] or [])
+    ]
 
 
 # -----------------------------------------------------------------------------
@@ -277,18 +330,7 @@ def _evaluate_internal(source: str, translation: str, reference: Optional[str], 
     inference_time = round((time.time() - inference_start) * 1000)
 
     score = float(output.scores[0])
-    errors = []
-
-    if hasattr(output, "metadata") and output.metadata:
-        metadata = output.metadata[0]
-        if metadata and "error_spans" in metadata:
-            for span in metadata["error_spans"]:
-                errors.append({
-                    "text": span.get("text", ""),
-                    "start": span.get("start", 0),
-                    "end": span.get("end", 0),
-                    "severity": span.get("severity", "minor"),
-                })
+    errors = _error_spans(output, 0)
 
     if score >= 0.9:
         quality = "Excellent"
@@ -355,7 +397,7 @@ def handle_detect_errors(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "total_errors": len(filtered_errors),
         "errors_by_severity": errors_by_severity,
-        "errors": [{"suggestion": None, **e} for e in filtered_errors],
+        "errors": filtered_errors,
     }
 
 
@@ -411,27 +453,14 @@ def handle_batch_evaluate(params: Dict[str, Any]) -> Dict[str, Any]:
 
     results = []
     for i, score in enumerate(output.scores):
-        result = {
+        errors = _error_spans(output, i)
+        results.append({
             "index": i,
             "score": float(score),
-            "errors": [],
-            "error_count": 0,
-            "has_critical_errors": False,
-        }
-        if hasattr(output, "metadata") and output.metadata and i < len(output.metadata):
-            metadata = output.metadata[i]
-            if metadata and "error_spans" in metadata:
-                for span in metadata["error_spans"]:
-                    result["errors"].append({
-                        "text": span.get("text", ""),
-                        "start": span.get("start", 0),
-                        "end": span.get("end", 0),
-                        "severity": span.get("severity", "minor"),
-                    })
-                    if span.get("severity") == "critical":
-                        result["has_critical_errors"] = True
-                result["error_count"] = len(result["errors"])
-        results.append(result)
+            "errors": errors,
+            "error_count": len(errors),
+            "has_critical_errors": any(e["severity"] == "critical" for e in errors),
+        })
 
     total_score = sum(r["score"] for r in results)
     average_score = total_score / len(results) if results else 0

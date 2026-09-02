@@ -96,6 +96,45 @@ source ~/.xcomet-venv/bin/activate
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
 
+#### Where the model is stored
+
+**Not in the virtualenv.** The venv holds the Python packages; the model weights
+go to the huggingface_hub cache, which is a separate directory shared by every
+tool on the machine that pulls from the Hub.
+
+```
+~/.xcomet-venv/                              ← Python packages only
+└── lib/python3.x/site-packages/
+    ├── comet/                               unbabel-comet itself
+    └── torch/  transformers/  ...           its dependencies
+
+~/.cache/huggingface/                        ← the model weights live here
+└── hub/
+    └── models--Unbabel--XCOMET-XL/
+        ├── blobs/                           the actual ~14GB checkpoint
+        └── snapshots/<revision>/
+            ├── checkpoints/model.ckpt       what download_model() returns
+            └── hparams.yaml
+```
+
+`download_model()` passes `cache_dir=None` to `snapshot_download()`, so
+huggingface_hub picks the location: `HF_HUB_CACHE`, which defaults to
+`HF_HOME/hub`, where `HF_HOME` defaults to `$XDG_CACHE_HOME/huggingface`
+(`~/.cache/huggingface` when `XDG_CACHE_HOME` is unset).
+
+Three consequences worth knowing:
+
+- Rebuilding or deleting the venv does **not** re-download the model.
+- Several venvs, and other Hub-based tools, share the same copy.
+- The size of the venv directory does not account for the 14GB. Use
+  `hf cache scan` to see what is actually on disk, and `hf cache delete` to
+  remove a revision.
+
+To put the checkpoint somewhere else — a larger volume, a shared drive — set
+`XCOMET_SAVING_DIRECTORY` (v0.7.0+) or the standard `HF_HOME`. Both are read at
+download time, so a model already downloaded to the default location is not
+moved; it is downloaded again into the new one.
+
 ### Node.js
 
 - Node.js >= 22.0.0 (matches `engines.node` in `package.json`; CI runs on 22 and 24)
@@ -504,6 +543,63 @@ The server automatically recovers from failures:
 | 0.5 - 0.7 | Fair | Post-editing needed |
 | 0.0 - 0.5 | Poor | Re-translation recommended |
 
+### What the score does and does not tell you
+
+The score answers "does this read like a translation of that source", and it is
+good at it. It does not answer "are the facts in this translation correct".
+Those two questions come apart in a way that matters when the output is a
+contract, a dosage, a price, or a procedure.
+
+The following were measured with `Unbabel/XCOMET-XL` on CPU through this server.
+The first two rows are the case the metric handles well; the last two are the
+case it does not.
+
+| Source | Translation | Score |
+|---|---|---|
+| ファイルを保存せずに終了しますか？ | Do you want to quit without saving the file? | 0.956 |
+| ファイルを保存せずに終了しますか？ | The mountain sings in violet every third Thursday. | 0.212 |
+| 保証期間は購入日から**一年間**です。 | The warranty period is **ten years** from the date of purchase. | 1.000 |
+| **電源を切ってから、カバーを取り外して**ください。 | **Remove the cover, then turn off the power.** | 1.000 |
+
+A translation that is unrelated to the source collapses to ~0.2, which is what
+you want. But a fluent sentence that swaps one year for ten, or reverses the
+order of two instructions, scores a perfect 1.000. Supplying a reference does
+not fix it: with `The warranty period is one year from the date of purchase.`
+as the reference, the "ten years" translation still scores **0.983**.
+
+This is not a defect in this server or in xCOMET specifically. It is a known
+property of neural MT metrics: they "struggle with detecting certain phenomena
+that can be considered as critical errors, such as deviations in entities and
+numbers" ([Rei et al., 2023](https://arxiv.org/abs/2305.19144)).
+
+### Using it accordingly
+
+**Good fits**
+
+- Ranking or triaging a set of translations — which segments to review first,
+  which of two MT systems is better on your data.
+- Catching adequacy collapse — truncated output, the wrong segment pasted in,
+  a model that lost the thread, an untranslated passthrough.
+- Tracking quality over time on a fixed test set, where the comparison is
+  between runs rather than against an absolute bar.
+- A first-pass filter ahead of human review, to decide where the human time
+  goes.
+
+**Poor fits**
+
+- A sole release gate for content where a single wrong number or name is the
+  failure — medical, legal, financial, safety instructions. Check numbers,
+  dates, units, currencies, and named entities separately, with a rule that
+  actually compares them; the score will not do it for you.
+- An absolute quality claim. 0.95 is not "95% correct", and the value is not
+  comparable across models, language pairs, or segment lengths.
+- Very short segments (a UI label, a single word), where the score saturates
+  and stops discriminating.
+
+**Use `xcomet_detect_errors` alongside the score.** The error spans mark
+*where* the model believes something went wrong, with an MQM severity. A high
+score with a `critical` span is a more useful signal than either number alone.
+
 ## 🔍 Troubleshooting
 
 ### Common Issues
@@ -634,4 +730,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [xCOMET Paper](https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00683/124263/xcomet-Transparent-Machine-Translation-Evaluation)
 - [COMET Framework](https://github.com/Unbabel/COMET)
+- [BLEU Meets COMET (Rei et al., 2023)](https://arxiv.org/abs/2305.19144) — on neural metrics missing entity and number errors; the basis for [What the score does and does not tell you](#what-the-score-does-and-does-not-tell-you)
+- [Hugging Face Hub cache layout](https://huggingface.co/docs/huggingface_hub/guides/manage-cache)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
