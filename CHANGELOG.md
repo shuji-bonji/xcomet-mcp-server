@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **`tests/README.md` を現状に追従** — v0.7.0 で追加した `mcp-protocol.test.ts` / `output-schemas.test.ts` / `test_server.py` の節を追加し、各スイートが何を守っているかを書いた。ファイル一覧に実行コマンド列を追加し、`test_server.py` が `npm test` ではなく `npm run test:python` である点、CI が Vitest と pytest の 2 系統に分かれている点、`publish.yml` は `test:python` を含まない点を明記。前提条件の `unbabel-comet` を `>=2.2.7,<3.0` に、Python 3.9-3.12 の根拠 (numpy の pin) を追記。
+- **README (英日) の Development に `npm run test:python` を追加** — `python3 -m pytest` を呼ぶだけなので PATH 上の `python3` に pytest が必要であること、xCOMET 用の venv を activate しても入っていなければ同じであること、`uvx pytest` を含む 3 通りの入れ方を書いた。前提条件が README のどこにも無く、`No module named pytest` の原因が分からない状態だった。
+- **README (英日) のトラブルシューティングに「Homebrew の更新後に venv が動かなくなった」を追加** — venv は interpreter 本体を持たず `pyvenv.cfg` の `home` への絶対リンクを持つだけなので、Homebrew がその formula を更新・削除すると丸ごと動かなくなる。症状・確認コマンド・作り直し手順に加えて、`uv venv --python 3.12` のほうが壊れにくいこと、作り直してもモデルは huggingface_hub のキャッシュにあるため再ダウンロードにならないことを書いた。
+
 ## [0.7.0] - 2026-09-01
 
 ### Changed

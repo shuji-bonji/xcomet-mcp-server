@@ -610,6 +610,43 @@ pip install -r python/requirements.txt
 export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 ```
 
+#### Homebrew の更新後に venv が動かなくなった
+
+**症状**: `zsh: no such file or directory: .venv/bin/python3`、activate したのに
+`python3` が venv 以外の interpreter を指す、昨日まで動いていた venv で
+`No module named 'comet'` が出る、など。
+
+**原因**: venv は interpreter 本体を持たず、作成元への絶対パスのシンボリックリンクを
+持ちます。記録は `pyvenv.cfg` にあります。
+
+```
+home = /opt/homebrew/opt/python@3.14/bin
+version = 3.14.3
+```
+
+Homebrew がその formula を更新・削除するとリンクの先が消え、venv は動かなくなります。
+`lib/python3.x/site-packages/` は残りますが、実行する手段がありません。
+
+**確認**:
+```bash
+ls -l .venv/bin/python3 && .venv/bin/python3 -V
+cat .venv/pyvenv.cfg
+```
+
+**解決策**: 作り直します。`uv venv --python 3.12` のほうが壊れにくい形です。uv が
+その interpreter を自分で取得して固定するので、Homebrew の現在の Python を借りません。
+
+```bash
+rm -rf .venv
+uv venv .venv --python 3.12
+source .venv/bin/activate
+uv pip install "unbabel-comet>=2.2.7,<3.0"
+```
+
+パッケージの再インストールで数百 MB かかりますが、**モデルは再ダウンロードされません**。
+チェックポイントは venv ではなく huggingface_hub のキャッシュにあります
+（[モデルの格納位置](#モデルの格納位置)を参照）。
+
 #### モデルのダウンロードが失敗またはタイムアウト
 
 **原因**: 大きなモデルファイル（XL は約 14GB）には安定したインターネット接続が必要。XCOMET モデルは HuggingFace 認証も必要です（[モデルのダウンロード](#モデルのダウンロード)を参照）。
@@ -694,12 +731,27 @@ npm run build
 # ウォッチモード
 npm run dev
 
-# テストを実行
+# テストを実行（Vitest）
 npm test
+
+# Python 側のテストを実行（pytest だけで動く。comet もモデルも不要）
+npm run test:python
 
 # MCP Inspector でテスト
 npm run inspect
 ```
+
+`npm run test:python` は `python3 -m pytest` を呼ぶので、PATH 上の `python3` から
+pytest が import できる必要があります。xCOMET 用の venv を activate しても、その venv に
+pytest が入っていなければ同じです。次のいずれかで入れてください。
+
+```bash
+uvx pytest tests/test_server.py -q                    # インストール不要
+~/.xcomet-venv/bin/python -m pip install pytest       # xCOMET の venv に入れる
+python3 -m venv .venv-dev && .venv-dev/bin/pip install pytest
+```
+
+各スイートが何を守っているかは [tests/README.md](tests/README.md) に書いてあります。
 
 ## 変更履歴
 

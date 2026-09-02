@@ -621,6 +621,44 @@ pip install -r python/requirements.txt
 export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 ```
 
+#### The venv stopped working after a Homebrew upgrade
+
+**Symptom**: `zsh: no such file or directory: .venv/bin/python3`, or `python3`
+inside an activated venv resolving to a different interpreter than the venv's,
+or `No module named 'comet'` in a venv that worked yesterday.
+
+**Cause**: A venv does not contain an interpreter — it stores an absolute
+symlink to the one it was created from, recorded in `pyvenv.cfg`:
+
+```
+home = /opt/homebrew/opt/python@3.14/bin
+version = 3.14.3
+```
+
+When Homebrew upgrades or removes that formula, the link dangles and the venv
+is dead. `lib/python3.x/site-packages/` is still there, but nothing can run it.
+
+**Check**:
+```bash
+ls -l .venv/bin/python3 && .venv/bin/python3 -V
+cat .venv/pyvenv.cfg
+```
+
+**Solution**: recreate it. `uv venv --python 3.12` is the more durable form,
+because uv fetches and pins that interpreter itself instead of borrowing
+Homebrew's current one.
+
+```bash
+rm -rf .venv
+uv venv .venv --python 3.12
+source .venv/bin/activate
+uv pip install "unbabel-comet>=2.2.7,<3.0"
+```
+
+Reinstalling the packages is a few hundred MB, but **the model is not
+re-downloaded**: the checkpoint lives in the huggingface_hub cache, not in the
+venv (see [Where the model is stored](#where-the-model-is-stored)).
+
 #### Model download fails or times out
 
 **Cause**: Large model files (~14GB for XL) require stable internet connection. XCOMET models also require HuggingFace authentication (see [Model Download](#model-download)).
@@ -705,12 +743,27 @@ npm run build
 # Watch mode
 npm run dev
 
-# Run tests
+# Run tests (Vitest)
 npm test
+
+# Run the Python-side tests (pytest only — no comet, no model)
+npm run test:python
 
 # Test with MCP Inspector
 npm run inspect
 ```
+
+`npm run test:python` calls `python3 -m pytest`, so pytest has to be importable from
+whichever `python3` is on your PATH. Activating the xCOMET venv does not help unless
+pytest is installed in it. Any of these work:
+
+```bash
+uvx pytest tests/test_server.py -q                    # nothing to install
+~/.xcomet-venv/bin/python -m pip install pytest       # add it to the xCOMET venv
+python3 -m venv .venv-dev && .venv-dev/bin/pip install pytest
+```
+
+[tests/README.md](tests/README.md) documents every suite, what it covers, and why.
 
 ## 📋 Changelog
 

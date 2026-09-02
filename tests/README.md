@@ -14,6 +14,10 @@ graph TD
         B --> F[golden-fixtures.test.ts]
         B --> G[integration.test.ts]
         B --> H[user-scenarios.test.ts]
+        B --> I[mcp-protocol.test.ts]
+        B --> J[output-schemas.test.ts]
+        K[npm run test:python] --> L[pytest]
+        L --> M[test_server.py]
     end
 
     subgraph "テスト対象"
@@ -23,21 +27,28 @@ graph TD
         F --> F1[xCOMET スコア range]
         G --> G1[Python サーバ統合]
         H --> H1[利用者シナリオ E2E]
+        I --> I1[tools/list と tools/call]
+        J --> J1[Python の出力 × outputSchema]
+        M --> M1[server.py の純粋関数]
     end
 ```
 
 ## テストファイル一覧
 
-| ファイル | 区分 | 種別 | Python 必須 |
-|---------|------|------|-------------|
-| `line-buffer.test.ts` | ユニット | TypeScript | 不要 |
-| `stop-race-condition.test.ts` | ユニット | TypeScript | 不要 |
-| `xcomet-service-di.test.ts` | ユニット (DI) | TypeScript | 不要 |
-| `golden-fixtures.test.ts` | リグレッション | Python + TS | 必要（無ければ skip） |
-| `integration.test.ts` | 統合 | Python + TS | 必要（無ければ skip） |
-| `user-scenarios.test.ts` | E2E | Python + TS | 必要（無ければ skip） |
+| ファイル | 区分 | 種別 | 実行コマンド | Python 必須 |
+|---------|------|------|-------------|-------------|
+| `line-buffer.test.ts` | ユニット | TypeScript | `npm test` | 不要 |
+| `stop-race-condition.test.ts` | ユニット | TypeScript | `npm test` | 不要 |
+| `xcomet-service-di.test.ts` | ユニット (DI) | TypeScript | `npm test` | 不要 |
+| `mcp-protocol.test.ts` | プロトコル | TypeScript | `npm test` | 不要 |
+| `output-schemas.test.ts` | 契約 | TypeScript | `npm test` | 不要 |
+| `golden-fixtures.test.ts` | リグレッション | Python + TS | `npm test` | 必要（無ければ skip） |
+| `integration.test.ts` | 統合 | Python + TS | `npm test` | 必要（無ければ skip） |
+| `user-scenarios.test.ts` | E2E | Python + TS | `npm test` | 必要（無ければ skip） |
+| `test_server.py` | ユニット | pytest | `npm run test:python` | **pytest のみ**（comet 不要） |
 
 `comet` パッケージが未インストールの環境では Python 必須テストは自動スキップされます。
+`test_server.py` は `npm test`（Vitest）には含まれません。別コマンドです。
 
 ---
 
@@ -276,6 +287,103 @@ graph TD
 
 ---
 
+## 7. MCP プロトコルテスト (`mcp-protocol.test.ts`)
+
+### 設計意図
+
+`src/server.ts` の `createServer()` に対して、**本物の `Client` をプロセス内で繋いで** `tools/list` と `tools/call` を叩きます。`createMcpHandler` が返す `handler.fetch` を `StreamableHTTPClientTransport` の `fetch` オプションに渡すだけで、ポートもソケットもモックの transport も要りません。
+
+このテストが守っているのは、**型検査にもユニットテストにも映らない失敗経路**です。SDK v2 は Zod スキーマを JSON Schema に変換して広告しますが、変換に失敗しても登録時には何も起きません。サーバーは起動し、接続も成功し、最初の `tools/list` だけがエラーを返します（v0.7.0 の zod 4 移行で、宣言レンジが zod 3 のままだとこれが起きます）。
+
+```mermaid
+flowchart LR
+    A[createServer] --> B[createMcpHandler]
+    B --> C[handler.fetch]
+    C --> D[StreamableHTTPClientTransport]
+    D --> E[Client]
+    E --> F[listTools / callTool]
+```
+
+### テストケース
+
+| テスト名 | 説明 |
+|---------|------|
+| `advertises all three tools with converted JSON Schemas` | 3 ツールが `inputSchema` / `outputSchema` 付きで広告される |
+| `keeps .describe() text in the advertised input schema` | `.describe()` の説明文が JSON Schema に残る（zod 4.2 未満だと落ちる） |
+| `rejects arguments the schema refuses before the handler runs` | スキーマ違反が `isError: true` で返り、ハンドラに到達しない |
+| `accepts an isError result with no structuredContent on a tool that declares outputSchema` | `createErrorResponse` の経路が v2 で通ることの確認 |
+
+---
+
+## 8. 出力スキーマ契約テスト (`output-schemas.test.ts`)
+
+### 設計意図
+
+MCP SDK は `structuredContent` を `outputSchema` で検証してから返します。**Python ワーカーが送るフィールドがスキーマと 1 つでも食い違うと、ツール呼び出しそのものが失敗します**。Node 側のユニットテストは Python の出力を知らず、Python 側のテストはスキーマを知らないため、この境界はどちらからも見えません。
+
+v0.7.0 で実際に踏んだのがこれでした。`handle_detect_errors` が全エラーに `suggestion: None` を差し込む一方、スキーマは `z.string().optional()` を宣言していました。zod の `.optional()` が受けるのは `undefined` であって `null` ではないため、エラーが 1 件でもある `xcomet_detect_errors` はすべて失敗します。エラースパンが常に空だったせいで 4 リリース発火しませんでした。
+
+```mermaid
+flowchart LR
+    A[python/server.py] -->|JSON-RPC| B[Node]
+    B --> C{outputSchema で検証}
+    C -->|通る| D[structuredContent として返る]
+    C -->|落ちる| E["Output validation error<br/>ツール呼び出しが失敗"]
+```
+
+ペイロードは XCOMET-XL を実際に動かして採取した実測値で、手書きの例ではありません。
+
+### テストケース
+
+| テスト名 | 説明 |
+|---------|------|
+| `xcomet_evaluate: a result carrying an error span` | スパンありの実測ペイロード |
+| `xcomet_evaluate: a result with no error spans` | スパンなしの実測ペイロード |
+| `xcomet_detect_errors: a result carrying an error span` | 重大度カウントを含む実測ペイロード |
+| `xcomet_detect_errors: an empty-text span is still a valid span` | COMET が返す幅ゼロのスパン（未翻訳の日本語が混ざった訳文で発生） |
+| `xcomet_detect_errors: a null suggestion is rejected` | `suggestion` が復活しても null が wire に出ないことの固定 |
+| `xcomet_batch_evaluate: mixed results, some with spans` | 5 件混在の実測ペイロード |
+| `rejects a severity the MQM label set does not define` | 未定義の重大度を弾く |
+
+---
+
+## 9. Python ユニットテスト (`test_server.py`)
+
+### 設計意図
+
+`python/server.py` のうち、**COMET の予測構造体を読み解く部分**を検証します。ここを間違えると壊れ方が静かです。サーバーは応答し続け、スコアも正しく、エラースパンだけが消えます。Node 側の統合テストからは正常な応答にしか見えません。実際に v0.3.4 から 0.6.3 まで、`output.metadata[0]` の誤りでスパンが常に空でした。
+
+COMET の `Prediction` は自前の `ModelOutput`（旧 transformers のコピー、`comet/models/utils.py:23`）を継承していて、`__getitem__` は str 以外のキーで `to_tuple()[k]`、つまり値の側を引きます。
+
+```python
+metadata = Prediction(src_scores=[...], mqm_scores=[...], error_spans=[[...]])
+
+metadata[0]               # → src_scores。サンプル 0 のデータではない
+len(metadata)             # → 3。サンプル数ではなくキー数
+metadata["error_spans"]   # → サンプルごとのスパンのリスト（正しい引き方）
+```
+
+テストはこの `ModelOutput` の挙動を写した最小クラスを用意して、`_error_spans` に通します。**pytest だけで動き、`comet` も torch もモデルも要りません。**
+
+### テストケース
+
+| テスト名 | 説明 |
+|---------|------|
+| `test_indexing_metadata_by_position_returns_the_wrong_thing` | 修正が前提としている挙動そのものを固定。将来 COMET 側が直れば失敗して気付ける |
+| `test_error_spans_are_returned_per_sample` | サンプルごとに正しいスパンが返る |
+| `test_confidence_is_dropped` | 出力スキーマにある 4 フィールドだけを返す |
+| `test_index_past_the_last_sample_is_empty` | 範囲外インデックス |
+| `test_reference_branch_has_five_metadata_keys` | 参照ありの分岐（キーが 5 つ） |
+| `test_model_without_metadata_yields_no_spans` | 回帰モデル（`wmt22-comet-da`）は metadata を持たない |
+| `test_metadata_without_error_spans_yields_no_spans` | `error_spans` キーが無い場合 |
+| `test_missing_span_fields_fall_back` | スパンのフィールド欠落時の既定値 |
+| `test_model_requires_reference_is_an_exact_match` | 完全一致判定（部分一致では拾わない）※パラメータ化 4 件 |
+| `test_num_workers_falls_back_to_one` | `XCOMET_NUM_WORKERS` の下限と不正値 ※パラメータ化 7 件 |
+| `test_local_files_only_flag` | `XCOMET_LOCAL_FILES_ONLY` の真偽値解釈 ※パラメータ化 7 件 |
+| `test_saving_directory_expands_home` | `XCOMET_SAVING_DIRECTORY` の `~` 展開と空文字 |
+
+---
+
 ## テストの実行方法
 
 ### 全テスト実行
@@ -302,6 +410,30 @@ npx vitest run tests/line-buffer.test.ts
 npx vitest run --coverage
 ```
 
+### Python 側のユニットテスト
+
+Vitest とは別コマンドです。`comet` もモデルも不要で、**pytest だけ**あれば動きます。
+
+```bash
+npm run test:python
+```
+
+`npm run test:python` は `python3 -m pytest` を呼ぶだけなので、PATH 上の `python3` に
+pytest が入っていなければ `No module named pytest` になります。入れ方はいくつかあります。
+
+```bash
+# uv があるなら（インストール不要、その場限りの環境で実行）
+uvx pytest tests/test_server.py -q
+
+# xCOMET 用の venv に入れてしまう
+~/.xcomet-venv/bin/python -m pip install pytest
+~/.xcomet-venv/bin/python -m pytest tests/test_server.py -q
+
+# 開発用の venv を新しく作る
+python3 -m venv .venv-dev && .venv-dev/bin/pip install pytest
+.venv-dev/bin/python -m pytest tests/test_server.py -q
+```
+
 ---
 
 ## テストの前提条件
@@ -313,12 +445,18 @@ npx vitest run --coverage
 
 ### Python 側（統合・E2E・golden テスト用）
 
-- Python 3.9 - 3.12（xCOMET 依存の都合）
-- `unbabel-comet>=2.2.0`
+- Python 3.9 - 3.12（`unbabel-comet` が `numpy <2.0` を固定しており、numpy 1.x の
+  最終版 1.26.4 の wheel が cp39-cp312 しかないため）
+- `unbabel-comet>=2.2.7,<3.0`
 
 ```bash
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.7,<3.0"
 ```
+
+### Python 側（`test_server.py` 用）
+
+- pytest のみ。`comet` も torch もモデルも不要で、実行は 0.03 秒程度です。
+- Python のバージョン制約もありません（3.9 以降であれば動きます）。
 
 > **Note (v0.5.0+)**: Python ワーカーは stdio JSON-RPC で通信するため、
 > FastAPI / uvicorn / pydantic は不要です。
@@ -327,14 +465,24 @@ pip install "unbabel-comet>=2.2.0"
 
 ## CI/CD での実行
 
-GitHub Actions では Python なしのスモーク（line-buffer / stop-race / DI / golden meta）のみ走らせています。Python ありのフルスイートはローカルまたは GPU ランナーでの実行を想定。
+GitHub Actions は 2 系統に分かれています。Python ありのフルスイート（golden / integration /
+user-scenarios）はモデルのダウンロードを伴うため、ローカルまたは GPU ランナーでの実行を想定しています。
 
 ```yaml
-- name: Run tests (no Python)
-  run: |
-    npm ci
-    npm test
+# Vitest: Python なしで走る分（line-buffer / stop-race / DI / protocol /
+# output-schemas / golden meta）。matrix で Node 22 と 24。
+- name: Run tests
+  run: npm test
+
+# pytest: test_server.py。pytest だけ入れれば動く。
+- name: Install pytest
+  run: python -m pip install --upgrade pytest
+- name: Run Python tests
+  run: npm run test:python
 ```
+
+`publish.yml`（タグ push 時）は lint → test → build → publish の順で、`test:python` は
+含みません。Python 側の検証は `ci.yml` の `python-tests` ジョブが担当します。
 
 ---
 
@@ -347,6 +495,12 @@ Python の `comet` モジュールが import できない環境では、`describ
 ```bash
 pip install "unbabel-comet>=2.2.0"
 ```
+
+### `npm run test:python` が `No module named pytest` で落ちる
+
+`test:python` は PATH 上の `python3` を使います。xCOMET 用の venv を activate しても、
+その venv に pytest が入っていなければ同じエラーになります。上の
+[Python 側のユニットテスト](#python-側のユニットテスト)にある 3 通りのいずれかで入れてください。
 
 ### タイムアウトエラー
 
