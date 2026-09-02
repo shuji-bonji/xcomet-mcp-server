@@ -44,13 +44,17 @@ xCOMET requires Python with several packages. We recommend using a virtual envir
 # If using uv (recommended - auto-downloads the correct Python version)
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0"
+uv pip install "unbabel-comet>=2.2.7,<3.0"
 
 # Or using standard venv (requires Python 3.9-3.12 already installed)
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.7,<3.0"
 ```
+
+> **Why Python 3.9-3.12?** `unbabel-comet` declares `numpy = "^1.20.0"`, so it
+> resolves numpy 1.x. The last numpy 1.x release, 1.26.4, ships wheels for
+> cp39-cp312 only. On Python 3.13 or later, pip has to build numpy from source.
 
 > **Note (v0.5.0+)**: The Python worker now talks to Node.js over stdin/stdout
 > (line-delimited JSON-RPC). FastAPI, uvicorn, and pydantic are no longer
@@ -63,11 +67,25 @@ pip install "unbabel-comet>=2.2.0"
 > **Important**: XCOMET-XL and XCOMET-XXL are **gated models** on HuggingFace. You must:
 > 1. Create a [HuggingFace](https://huggingface.co/) account
 > 2. Visit [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) and request access
-> 3. Login via CLI:
+> 3. Authenticate, either via the CLI:
 >    ```bash
 >    source ~/.xcomet-venv/bin/activate
->    huggingface-cli login
+>    hf auth login
 >    ```
+>    (`huggingface-cli login` still works but prints a deprecation warning since
+>    huggingface_hub 0.34; `hf` is the current command.)
+>
+>    Or by setting `HF_TOKEN` in the MCP host's `env` block, which is the option
+>    when the host launches the server in an environment where no CLI login has
+>    been performed:
+>    ```json
+>    "env": {
+>      "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3",
+>      "HF_TOKEN": "hf_..."
+>    }
+>    ```
+>    huggingface_hub reads `HF_TOKEN` first and falls back to the token file
+>    written by `hf auth login`.
 >
 > `Unbabel/wmt22-comet-da` does **not** require authentication (but requires reference translations).
 
@@ -77,6 +95,45 @@ After authentication, download the model (~14GB for XL, ~42GB for XXL):
 source ~/.xcomet-venv/bin/activate
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+#### Where the model is stored
+
+**Not in the virtualenv.** The venv holds the Python packages; the model weights
+go to the huggingface_hub cache, which is a separate directory shared by every
+tool on the machine that pulls from the Hub.
+
+```
+~/.xcomet-venv/                              ← Python packages only
+└── lib/python3.x/site-packages/
+    ├── comet/                               unbabel-comet itself
+    └── torch/  transformers/  ...           its dependencies
+
+~/.cache/huggingface/                        ← the model weights live here
+└── hub/
+    └── models--Unbabel--XCOMET-XL/
+        ├── blobs/                           the actual ~14GB checkpoint
+        └── snapshots/<revision>/
+            ├── checkpoints/model.ckpt       what download_model() returns
+            └── hparams.yaml
+```
+
+`download_model()` passes `cache_dir=None` to `snapshot_download()`, so
+huggingface_hub picks the location: `HF_HUB_CACHE`, which defaults to
+`HF_HOME/hub`, where `HF_HOME` defaults to `$XDG_CACHE_HOME/huggingface`
+(`~/.cache/huggingface` when `XDG_CACHE_HOME` is unset).
+
+Three consequences worth knowing:
+
+- Rebuilding or deleting the venv does **not** re-download the model.
+- Several venvs, and other Hub-based tools, share the same copy.
+- The size of the venv directory does not account for the 14GB. Use
+  `hf cache scan` to see what is actually on disk, and `hf cache delete` to
+  remove a revision.
+
+To put the checkpoint somewhere else — a larger volume, a shared drive — set
+`XCOMET_SAVING_DIRECTORY` (v0.7.0+) or the standard `HF_HOME`. Both are read at
+download time, so a model already downloaded to the default location is not
+moved; it is downloaded again into the new one.
 
 ### Node.js
 
@@ -315,6 +372,9 @@ Then ask Claude:
 | `XCOMET_PRELOAD` | `false` | Pre-load model at startup (v0.3.1+) |
 | `XCOMET_DEBUG` | `false` | Enable verbose debug logging (v0.3.1+) |
 | `XCOMET_NUM_WORKERS` | `1` | DataLoader workers for `model.predict()` (v0.6.0+). Increase to better utilize idle CPU cores when running large batches, especially on GPU. Invalid values silently fall back to `1`. |
+| `XCOMET_SAVING_DIRECTORY` | (HuggingFace cache) | Directory to download the checkpoint into (v0.7.0+). Unset, the model goes to the huggingface_hub cache (`HF_HOME`, default `~/.cache/huggingface`). Set this to put a 14GB (XL) or 43GB (XXL) checkpoint on another volume. |
+| `XCOMET_LOCAL_FILES_ONLY` | `false` | Resolve the checkpoint from the local cache only (v0.7.0+). Set to `true` to start with no network access; the model must already be downloaded. |
+| `HF_TOKEN` | (unset) | HuggingFace access token, read by huggingface_hub. An alternative to `hf auth login` for the gated models (XCOMET-XL, XCOMET-XXL, the CometKiwi models). |
 
 ### Model Selection
 
@@ -483,6 +543,63 @@ The server automatically recovers from failures:
 | 0.5 - 0.7 | Fair | Post-editing needed |
 | 0.0 - 0.5 | Poor | Re-translation recommended |
 
+### What the score does and does not tell you
+
+The score answers "does this read like a translation of that source", and it is
+good at it. It does not answer "are the facts in this translation correct".
+Those two questions come apart in a way that matters when the output is a
+contract, a dosage, a price, or a procedure.
+
+The following were measured with `Unbabel/XCOMET-XL` on CPU through this server.
+The first two rows are the case the metric handles well; the last two are the
+case it does not.
+
+| Source | Translation | Score |
+|---|---|---|
+| ファイルを保存せずに終了しますか？ | Do you want to quit without saving the file? | 0.956 |
+| ファイルを保存せずに終了しますか？ | The mountain sings in violet every third Thursday. | 0.212 |
+| 保証期間は購入日から**一年間**です。 | The warranty period is **ten years** from the date of purchase. | 1.000 |
+| **電源を切ってから、カバーを取り外して**ください。 | **Remove the cover, then turn off the power.** | 1.000 |
+
+A translation that is unrelated to the source collapses to ~0.2, which is what
+you want. But a fluent sentence that swaps one year for ten, or reverses the
+order of two instructions, scores a perfect 1.000. Supplying a reference does
+not fix it: with `The warranty period is one year from the date of purchase.`
+as the reference, the "ten years" translation still scores **0.983**.
+
+This is not a defect in this server or in xCOMET specifically. It is a known
+property of neural MT metrics: they "struggle with detecting certain phenomena
+that can be considered as critical errors, such as deviations in entities and
+numbers" ([Rei et al., 2023](https://arxiv.org/abs/2305.19144)).
+
+### Using it accordingly
+
+**Good fits**
+
+- Ranking or triaging a set of translations — which segments to review first,
+  which of two MT systems is better on your data.
+- Catching adequacy collapse — truncated output, the wrong segment pasted in,
+  a model that lost the thread, an untranslated passthrough.
+- Tracking quality over time on a fixed test set, where the comparison is
+  between runs rather than against an absolute bar.
+- A first-pass filter ahead of human review, to decide where the human time
+  goes.
+
+**Poor fits**
+
+- A sole release gate for content where a single wrong number or name is the
+  failure — medical, legal, financial, safety instructions. Check numbers,
+  dates, units, currencies, and named entities separately, with a rule that
+  actually compares them; the score will not do it for you.
+- An absolute quality claim. 0.95 is not "95% correct", and the value is not
+  comparable across models, language pairs, or segment lengths.
+- Very short segments (a UI label, a single word), where the score saturates
+  and stops discriminating.
+
+**Use `xcomet_detect_errors` alongside the score.** The error spans mark
+*where* the model believes something went wrong, with an MQM severity. A high
+score with a `critical` span is a more useful signal than either number alone.
+
 ## 🔍 Troubleshooting
 
 ### Common Issues
@@ -510,12 +627,16 @@ export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 
 **Solution**:
 ```bash
-# Login to HuggingFace (required for XCOMET-XL/XXL)
-huggingface-cli login
+# Authenticate with HuggingFace (required for XCOMET-XL/XXL)
+hf auth login          # or: export HF_TOKEN=hf_...
 
 # Pre-download the model manually
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+If the download was interrupted, the cache keeps a snapshot directory with no
+`checkpoints/model.ckpt` in it. The server reports that path and asks you to
+delete the directory; `hf cache scan` lists where it is.
 
 #### GPU not detected
 
@@ -609,4 +730,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [xCOMET Paper](https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00683/124263/xcomet-Transparent-Machine-Translation-Evaluation)
 - [COMET Framework](https://github.com/Unbabel/COMET)
+- [BLEU Meets COMET (Rei et al., 2023)](https://arxiv.org/abs/2305.19144) — on neural metrics missing entity and number errors; the basis for [What the score does and does not tell you](#what-the-score-does-and-does-not-tell-you)
+- [Hugging Face Hub cache layout](https://huggingface.co/docs/huggingface_hub/guides/manage-cache)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)

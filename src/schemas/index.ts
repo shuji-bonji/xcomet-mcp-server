@@ -134,7 +134,6 @@ export const DetectErrorsOutputSchema = z.object({
         start: z.number(),
         end: z.number(),
         severity: ErrorSeverity,
-        suggestion: z.string().optional().describe("Suggested correction if available"),
       })
     )
     .describe("Detailed error list"),

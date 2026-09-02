@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import {
   EvaluateInputSchema,
   EvaluateOutputSchema,
@@ -6,9 +6,6 @@ import {
   DetectErrorsOutputSchema,
   BatchEvaluateInputSchema,
   BatchEvaluateOutputSchema,
-  type EvaluateInput,
-  type DetectErrorsInput,
-  type BatchEvaluateInput,
 } from "../schemas/index.js";
 import { xCometService } from "../services/xcomet.js";
 import { TOOL_DESCRIPTIONS } from "./descriptions.js";
@@ -110,23 +107,11 @@ export function registerTools(server: McpServer): void {
     {
       title: "Evaluate Translation Quality",
       description: TOOL_DESCRIPTIONS.evaluate,
-      inputSchema: {
-        source: EvaluateInputSchema.shape.source,
-        translation: EvaluateInputSchema.shape.translation,
-        reference: EvaluateInputSchema.shape.reference,
-        source_lang: EvaluateInputSchema.shape.source_lang,
-        target_lang: EvaluateInputSchema.shape.target_lang,
-        response_format: EvaluateInputSchema.shape.response_format,
-        use_gpu: EvaluateInputSchema.shape.use_gpu,
-      },
-      outputSchema: {
-        score: EvaluateOutputSchema.shape.score,
-        errors: EvaluateOutputSchema.shape.errors,
-        summary: EvaluateOutputSchema.shape.summary,
-      },
+      inputSchema: EvaluateInputSchema,
+      outputSchema: EvaluateOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (params: EvaluateInput) => {
+    async (params) => {
       try {
         const result = await xCometService.evaluate(
           params.source,
@@ -147,22 +132,11 @@ export function registerTools(server: McpServer): void {
     {
       title: "Detect Translation Errors",
       description: TOOL_DESCRIPTIONS.detectErrors,
-      inputSchema: {
-        source: DetectErrorsInputSchema.shape.source,
-        translation: DetectErrorsInputSchema.shape.translation,
-        reference: DetectErrorsInputSchema.shape.reference,
-        min_severity: DetectErrorsInputSchema.shape.min_severity,
-        response_format: DetectErrorsInputSchema.shape.response_format,
-        use_gpu: DetectErrorsInputSchema.shape.use_gpu,
-      },
-      outputSchema: {
-        total_errors: DetectErrorsOutputSchema.shape.total_errors,
-        errors_by_severity: DetectErrorsOutputSchema.shape.errors_by_severity,
-        errors: DetectErrorsOutputSchema.shape.errors,
-      },
+      inputSchema: DetectErrorsInputSchema,
+      outputSchema: DetectErrorsOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (params: DetectErrorsInput) => {
+    async (params) => {
       try {
         const result = await xCometService.detectErrors(
           params.source,
@@ -184,23 +158,11 @@ export function registerTools(server: McpServer): void {
     {
       title: "Batch Evaluate Translations",
       description: TOOL_DESCRIPTIONS.batchEvaluate,
-      inputSchema: {
-        pairs: BatchEvaluateInputSchema.shape.pairs,
-        source_lang: BatchEvaluateInputSchema.shape.source_lang,
-        target_lang: BatchEvaluateInputSchema.shape.target_lang,
-        response_format: BatchEvaluateInputSchema.shape.response_format,
-        use_gpu: BatchEvaluateInputSchema.shape.use_gpu,
-        batch_size: BatchEvaluateInputSchema.shape.batch_size,
-      },
-      outputSchema: {
-        average_score: BatchEvaluateOutputSchema.shape.average_score,
-        total_pairs: BatchEvaluateOutputSchema.shape.total_pairs,
-        results: BatchEvaluateOutputSchema.shape.results,
-        summary: BatchEvaluateOutputSchema.shape.summary,
-      },
+      inputSchema: BatchEvaluateInputSchema,
+      outputSchema: BatchEvaluateOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (params: BatchEvaluateInput) => {
+    async (params) => {
       try {
         const result = await xCometService.batchEvaluate(
           params.pairs,

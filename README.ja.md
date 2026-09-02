@@ -44,13 +44,18 @@ xCOMET には複数の Python パッケージが必要です。仮想環境（ve
 # uv を使う場合（推奨 — 適切な Python バージョンを自動ダウンロード）
 uv venv ~/.xcomet-venv --python 3.12
 source ~/.xcomet-venv/bin/activate
-uv pip install "unbabel-comet>=2.2.0"
+uv pip install "unbabel-comet>=2.2.7,<3.0"
 
 # 標準の venv を使う場合（Python 3.9-3.12 が既にインストールされている必要あり）
 python3 -m venv ~/.xcomet-venv
 source ~/.xcomet-venv/bin/activate  # Windows: ~/.xcomet-venv\Scripts\activate
-pip install "unbabel-comet>=2.2.0"
+pip install "unbabel-comet>=2.2.7,<3.0"
 ```
+
+> **なぜ Python 3.9-3.12 なのか**: `unbabel-comet` は `numpy = "^1.20.0"` を
+> 宣言しているため numpy 1.x が入ります。numpy 1.x の最終版 1.26.4 の wheel は
+> cp39-cp312 しかありません。Python 3.13 以降では pip が numpy を
+> ソースからビルドすることになります。
 
 > **Note (v0.5.0+)**: Python ワーカーは Node.js と stdin/stdout 上の
 > 行区切り JSON-RPC で通信します。FastAPI / uvicorn / pydantic は
@@ -63,11 +68,24 @@ pip install "unbabel-comet>=2.2.0"
 > **重要**: XCOMET-XL と XCOMET-XXL は HuggingFace の**ゲート付きモデル**です。以下の手順が必要です：
 > 1. [HuggingFace](https://huggingface.co/) アカウントを作成
 > 2. [Unbabel/XCOMET-XL](https://huggingface.co/Unbabel/XCOMET-XL) にアクセスし、利用をリクエスト
-> 3. CLI でログイン：
+> 3. 認証する。CLI でログインするか：
 >    ```bash
 >    source ~/.xcomet-venv/bin/activate
->    huggingface-cli login
+>    hf auth login
 >    ```
+>    （`huggingface-cli login` も動きますが、huggingface_hub 0.34 以降は
+>    deprecation warning を出します。現行のコマンドは `hf` です。）
+>
+>    または MCP ホストの `env` に `HF_TOKEN` を設定します。ホストが CLI ログインを
+>    していない環境でサーバーを起動する場合はこちらになります：
+>    ```json
+>    "env": {
+>      "XCOMET_PYTHON_PATH": "~/.xcomet-venv/bin/python3",
+>      "HF_TOKEN": "hf_..."
+>    }
+>    ```
+>    huggingface_hub は `HF_TOKEN` を先に読み、無ければ `hf auth login` が
+>    書いたトークンファイルを読みます。
 >
 > `Unbabel/wmt22-comet-da` は認証**不要**です（ただし参照訳が必須）。
 
@@ -77,6 +95,42 @@ pip install "unbabel-comet>=2.2.0"
 source ~/.xcomet-venv/bin/activate
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+#### モデルの格納位置
+
+**venv の配下には入りません。** venv に入るのは Python パッケージだけで、モデルの重みは
+huggingface_hub のキャッシュに入ります。ここは Hub からモデルを取得するツール全体で
+共有される、venv とは独立したディレクトリです。
+
+```
+~/.xcomet-venv/                              ← Python パッケージのみ
+└── lib/python3.x/site-packages/
+    ├── comet/                               unbabel-comet 本体
+    └── torch/  transformers/  ...           その依存
+
+~/.cache/huggingface/                        ← モデルの重みはこちら
+└── hub/
+    └── models--Unbabel--XCOMET-XL/
+        ├── blobs/                           実体（約 14GB）
+        └── snapshots/<revision>/
+            ├── checkpoints/model.ckpt       download_model() が返すパス
+            └── hparams.yaml
+```
+
+`download_model()` は `snapshot_download()` に `cache_dir=None` を渡すため、格納先は
+huggingface_hub が決めます。`HF_HUB_CACHE` が既定で `HF_HOME/hub`、`HF_HOME` の既定が
+`$XDG_CACHE_HOME/huggingface`（`XDG_CACHE_HOME` 未設定なら `~/.cache/huggingface`）です。
+
+この分離から言えることが 3 つあります。
+
+- venv を作り直しても削除しても、モデルは再ダウンロードになりません。
+- 複数の venv や Hub を使う他のツールが、同じ 1 つのコピーを共有します。
+- venv のディレクトリ容量を見ても 14GB は現れません。実際の使用量は `hf cache scan`
+  で確認し、不要な revision は `hf cache delete` で削除します。
+
+別ボリュームや共有ドライブに置きたい場合は `XCOMET_SAVING_DIRECTORY`（v0.7.0+）か、
+標準の `HF_HOME` を設定します。どちらもダウンロード時に読まれるだけなので、既定の場所に
+ダウンロード済みのモデルが移動するわけではありません。新しい場所に改めてダウンロードされます。
 
 ### Node.js
 
@@ -315,6 +369,9 @@ Claude への指示例：
 | `XCOMET_PRELOAD` | `false` | 起動時にモデルをプリロード（v0.3.1+） |
 | `XCOMET_DEBUG` | `false` | 詳細デバッグログを有効化（v0.3.1+） |
 | `XCOMET_NUM_WORKERS` | `1` | `model.predict()` 用 DataLoader ワーカー数（v0.6.0+）。大きなバッチで GPU を回す際、CPU コアに余裕があれば増やすとスループットが改善。不正な値は `1` にフォールバック。 |
+| `XCOMET_SAVING_DIRECTORY` | （HuggingFace のキャッシュ） | チェックポイントのダウンロード先ディレクトリ（v0.7.0+）。未設定なら huggingface_hub のキャッシュ（`HF_HOME`、既定は `~/.cache/huggingface`）に入ります。XL は 14GB、XXL は 43GB あるので、別ボリュームに置きたい場合に指定します。 |
+| `XCOMET_LOCAL_FILES_ONLY` | `false` | チェックポイントをローカルキャッシュからのみ解決する（v0.7.0+）。`true` にするとネットワークなしで起動します。モデルがダウンロード済みである必要があります。 |
+| `HF_TOKEN` | （未設定） | huggingface_hub が読む HuggingFace のアクセストークン。ゲート付きモデル（XCOMET-XL、XCOMET-XXL、CometKiwi 系）に対して `hf auth login` の代わりに使えます。 |
 
 ### モデル選択
 
@@ -482,6 +539,56 @@ v0.3.0+ では、モデルはメモリに常駐します。複数の `xcomet_eva
 | 0.5 - 0.7 | 普通 | ポストエディットが必要 |
 | 0.0 - 0.5 | 低品質 | 再翻訳を推奨 |
 
+### スコアが答えていること、答えていないこと
+
+このスコアが答えているのは「この文はその原文の翻訳として読めるか」であり、そこは得意です。
+答えていないのは「この翻訳に書かれている事実が正しいか」です。出力が契約書・用法用量・
+価格・作業手順であるとき、この 2 つは別々の問題になります。
+
+以下は本サーバー経由で `Unbabel/XCOMET-XL`（CPU）を実際に動かして測った値です。
+上 2 行がこの指標の得意な形、下 2 行が苦手な形です。
+
+| 原文 | 訳文 | スコア |
+|---|---|---|
+| ファイルを保存せずに終了しますか？ | Do you want to quit without saving the file? | 0.956 |
+| ファイルを保存せずに終了しますか？ | The mountain sings in violet every third Thursday. | 0.212 |
+| 保証期間は購入日から**一年間**です。 | The warranty period is **ten years** from the date of purchase. | 1.000 |
+| **電源を切ってから、カバーを取り外して**ください。 | **Remove the cover, then turn off the power.** | 1.000 |
+
+原文と無関係な訳文は約 0.2 まで落ちます。これは期待どおりです。一方、文として流暢なまま
+「一年間」を「ten years」に置き換えた訳文や、2 つの指示の順序を入れ替えた訳文は 1.000 に
+なります。参照訳を与えても変わりません。参照訳に
+`The warranty period is one year from the date of purchase.` を渡しても、「ten years」の
+訳文は **0.983** でした。
+
+これは本サーバーや xCOMET 固有の欠陥ではありません。ニューラル系の翻訳評価指標に共通する
+既知の性質で、「エンティティや数値のずれのような、クリティカルエラーとみなせる現象の検出が
+苦手である」と報告されています（[Rei et al., 2023](https://arxiv.org/abs/2305.19144)）。
+
+### それを踏まえた使いどころ
+
+**向いている**
+
+- 複数の訳文の順位付け・トリアージ。どのセグメントから見直すか、2 つの MT システムの
+  どちらが自分のデータで良いか。
+- 内容の崩壊の検出。途中で切れた訳文、別セグメントの混入、原文を見失った出力、
+  未翻訳のまま素通りした箇所。
+- 固定テストセットでの品質の推移の追跡。絶対値ではなく実行間の比較として使う。
+- 人手レビューの前段フィルタ。人の時間をどこに割くかを決める用途。
+
+**向いていない**
+
+- 数値や固有名詞の取り違えが 1 つあれば不合格になる領域（医療・法務・金融・安全手順）で、
+  これ単独をリリース判定にすること。数値・日付・単位・通貨・固有名詞は、実際に突き合わせる
+  ルールで別途チェックしてください。スコアは代わりになりません。
+- 絶対的な品質の主張。0.95 は「95% 正しい」ではなく、モデル間・言語ペア間・
+  セグメント長の異なるもの同士で比較できる値でもありません。
+- 極端に短いセグメント（UI ラベル、単語 1 つ）。スコアが飽和して差がつかなくなります。
+
+**`xcomet_detect_errors` をスコアと併用してください。** エラースパンは、モデルが
+「どこが」おかしいと判断したかを MQM の重大度付きで示します。高いスコアと `critical` の
+スパンが同時に出ている状態は、どちらか一方の数値よりも有用な信号です。
+
 ## トラブルシューティング
 
 ### よくある問題
@@ -509,12 +616,16 @@ export XCOMET_PYTHON_PATH=~/.xcomet-venv/bin/python3
 
 **解決策**:
 ```bash
-# HuggingFace にログイン（XCOMET-XL/XXL に必要）
-huggingface-cli login
+# HuggingFace で認証（XCOMET-XL/XXL に必要）
+hf auth login          # または: export HF_TOKEN=hf_...
 
 # モデルを手動で事前ダウンロード
 python -c "from comet import download_model; download_model('Unbabel/XCOMET-XL')"
 ```
+
+ダウンロードが途中で止まった場合、キャッシュには `checkpoints/model.ckpt` を
+含まない snapshot ディレクトリが残ります。サーバーはそのパスを示して削除を促します。
+場所は `hf cache scan` で確認できます。
 
 #### GPU が検出されない
 
@@ -608,4 +719,6 @@ MIT License - 詳細は [LICENSE](LICENSE) を参照してください。
 
 - [xCOMET 論文](https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00683/124263/xcomet-Transparent-Machine-Translation-Evaluation)
 - [COMET フレームワーク](https://github.com/Unbabel/COMET)
+- [BLEU Meets COMET (Rei et al., 2023)](https://arxiv.org/abs/2305.19144) — ニューラル指標がエンティティ・数値の誤りを見落とすことについて。[スコアが答えていること、答えていないこと](#スコアが答えていること答えていないこと)の根拠
+- [Hugging Face Hub のキャッシュ構造](https://huggingface.co/docs/huggingface_hub/guides/manage-cache)
 - [MCP 仕様](https://spec.modelcontextprotocol.io/)

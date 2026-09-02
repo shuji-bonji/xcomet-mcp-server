@@ -3,5 +3,13 @@
 # Starting in v0.5.0 the Python server communicates with the Node side
 # over stdin/stdout (line-delimited JSON-RPC), so FastAPI/uvicorn/pydantic
 # are no longer required. Only the xCOMET model itself is needed.
+#
+# Lower bound: 2.2.7 is the current release (2025-09-01) and the one this
+# server is tested against. Upper bound: this server calls download_model(),
+# load_from_checkpoint() and model.predict(batch_size=, gpus=, num_workers=,
+# progress_bar=) directly, so a major release may change those signatures.
+#
+# unbabel-comet pins numpy <2.0, whose last release (1.26.4) ships wheels for
+# cp39-cp312 only. That is what caps this server at Python 3.12.
 
-unbabel-comet>=2.2.0
+unbabel-comet>=2.2.7,<3.0
